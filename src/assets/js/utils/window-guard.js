@@ -1,9 +1,9 @@
 /**
  * window-guard — garde de navigation pour TOUTES les fenêtres du launcher (processus principal).
  *
- * Les fenêtres du launcher tournent avec nodeIntegration (le rendu utilise require/ipcRenderer partout,
- * passer à contextIsolation + preload demanderait de réécrire tout le rendu). Le risque principal est
- * donc qu'une page étrangère se charge DANS une fenêtre qui a accès à Node. Ici :
+ * La fenêtre principale tourne avec nodeIntegration (le rendu lance le jeu et lit le disque ; seule la fenêtre
+ * de mise à jour est isolée : sandbox + preload). Le risque principal est donc qu'une page étrangère se
+ * charge DANS une fenêtre qui a accès à Node. Ici :
  *  - la fenêtre principale ne peut naviguer que vers les pages locales du launcher (file:// dans le
  *    dossier de l'application) ; un lien http(s) part dans le navigateur, tout le reste est refusé ;
  *  - aucune nouvelle fenêtre n'est jamais ouverte par le rendu (window.open, target=_blank) : les liens
@@ -53,6 +53,12 @@ function install(app) {
     app.on('web-contents-created', (_event, contents) => {
         // Aucune <webview> : elle aurait ses propres préférences et pourrait réactiver Node.
         contents.on('will-attach-webview', (e) => e.preventDefault());
+
+        // Permissions web (caméra, micro, position, USB…) : refusées par défaut, y compris pour les iframes
+        // (skin 3D, YouTube). Seuls les notifications de bureau (opt-in) et le plein écran restent permis.
+        contents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+            callback(permission === 'notifications' || permission === 'fullscreen');
+        });
 
         // Jamais de nouvelle fenêtre : un lien externe part dans le navigateur.
         contents.setWindowOpenHandler(({ url }) => {

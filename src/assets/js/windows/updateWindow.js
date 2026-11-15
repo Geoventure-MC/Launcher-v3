@@ -32,12 +32,13 @@ function createWindow() {
         icon: `./src/assets/images/icon.${os.platform() === "win32" ? "ico" : "png"}`,
         frame: false,
         show: false,
-        // nodeIntegration reste nécessaire : tout le rendu utilise require()/ipcRenderer. Les défenses sont
-        // ailleurs : garde de navigation (utils/window-guard.js), CSP dans le HTML, aucun Node dans les
-        // iframes (skin 3D, YouTube), pas de <webview>, pas de navigation par glisser-déposer.
+        // Fenêtre ISOLÉE : sandbox, contextIsolation, aucun Node. La page ne dispose que des fonctions du
+        // preload (updatePreload.js, liste blanche de canaux IPC). Elle ne charge que des pages locales.
         webPreferences: {
-            contextIsolation: false,
-            nodeIntegration: true,
+            preload: path.join(__dirname, "updatePreload.js"),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
             nodeIntegrationInSubFrames: false,
             nodeIntegrationInWorker: false,
             webviewTag: false,
@@ -60,4 +61,4 @@ module.exports = {
     getWindow,
     createWindow,
     destroyWindow,
-};
+};

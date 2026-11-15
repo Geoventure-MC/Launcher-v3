@@ -6,15 +6,47 @@
  * Edited by CentralCorp Team
  */
 'use strict';
-const { ipcRenderer, shell } = require('electron');
-import { config, t } from './utils.js';
-import { openExternal } from './utils/external.js';
-const os = require('os');
-const nodeFetch = require('node-fetch');
+// Fenêtre isolée (sandbox, sans Node) : tout passe par les fonctions du preload (windows/updatePreload.js).
+const api = window.nexusUpdate;
 
+// Les messages d'erreur (réseau, panel) sont du TEXTE : jamais interprétés comme du HTML dans setStatus.
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-let dev = process.env.NODE_ENV === 'dev';
+// Données du processus principal (plateforme, dépôt des releases, traductions) : lues une seule fois.
+const boot = api.init((navigator.language || 'en').split('-')[0] || 'en');
+const t = (key) => boot.then(b => (b.translations && b.translations[key]) || key);
+const ls = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 
+// Config du panel (récupérée par le processus principal). Même cache hors-ligne que utils/config.js :
+// si le panel est injoignable, la dernière config valide de l'instance est reservie au lieu de bloquer.
+function cacheKey() {
+    const slug = ls('geoventure_selected_instance') || 'default';
+    return 'geoventure_config_cache_' + slug + (ls('geoventure_selected_channel') === 'test' ? '_test' : '');
+}
+const config = {
+    async GetConfig() {
+        try {
+            const res = await api.fetchConfig({
+                serverUrl: ls('geoventure_server_url'),
+                instance: ls('geoventure_selected_instance'),
+                channel: ls('geoventure_selected_channel'),
+            });
+            if (!res || !res.ok) throw new Error((res && res.error) || 'configuration indisponible');
+            try { localStorage.setItem(cacheKey(), JSON.stringify({ savedAt: Date.now(), config: res.config })); } catch { /* non bloquant */ }
+            return res.config;
+        } catch (error) {
+            console.error("Failed to fetch config:", error);
+            try {
+                const parsed = JSON.parse(ls(cacheKey()));
+                if (parsed && typeof parsed.config === 'object' && parsed.config !== null) {
+                    console.warn('Panel injoignable : utilisation de la config en cache (mode hors-ligne).');
+                    return parsed.config;
+                }
+            } catch { /* pas de cache */ }
+            throw error;
+        }
+    }
+};
 
 class Splash {
     constructor() {
@@ -24,7 +56,7 @@ class Splash {
         this.message = document.querySelector(".message");
         this.progress = document.querySelector("progress");
         document.addEventListener('DOMContentLoaded', async () => {
-            if (process.platform == 'win32') ipcRenderer.send('update-window-progress-load')
+            if ((await boot).platform == 'win32') api.progressLoad()
             this.startAnimation();
         })
     }
@@ -38,9 +70,9 @@ class Splash {
             this.splashAuthor.children[0].textContent = "@" + splash.author;
         })
 
-        document.getElementById('splash-message').textContent = t('welcome_message');
-        document.getElementById('splash-author').textContent = t('developed_by');
-        document.getElementById('update-message').textContent = t('checking_updates');
+        document.getElementById('splash-message').textContent = await t('welcome_message');
+        document.getElementById('splash-author').textContent = await t('developed_by');
+        document.getElementById('update-message').textContent = await t('checking_updates');
 
         await sleep(100);
         document.querySelector("#splash").style.display = "block";
@@ -58,43 +90,44 @@ class Splash {
     async checkUpdate() {
         this.setStatus(`Recherche de mise à jour...`);
 
-        ipcRenderer.invoke('update-app').then().catch(err => {
+        api.checkForUpdate().catch(err => {
             // A failed update check (no release feed, network down, unpacked dev
             // build…) must NOT block the launcher. Log it and continue startup.
             console.error('Recherche de mise à jour échouée :', err && err.message ? err.message : err);
             return this.maintenanceCheck();
         });
 
-        ipcRenderer.on('updateAvailable', () => {
+        api.onUpdateAvailable(async () => {
             this.setStatus(`Mise à jour disponible !`);
             // Windows : mise à jour automatique. Linux en AppImage : electron-updater sait aussi
             // remplacer l'AppImage (variable APPIMAGE posée par le lanceur) → même chemin, avec
             // barre de progression. Les autres cas (macOS, .deb, dossier décompressé) restent manuels.
-            const auto = os.platform() == 'win32' || (os.platform() == 'linux' && !!process.env.APPIMAGE);
+            const b = await boot;
+            const auto = b.platform == 'win32' || (b.platform == 'linux' && b.appImage);
             if (auto) {
                 this.updateDownloading = true;
                 this.toggleProgress();
-                ipcRenderer.send('start-update');
+                api.startUpdate();
             }
             else return this.dowloadUpdate();
         })
 
-        ipcRenderer.on('error', (event, err) => {
+        api.onUpdateError((err) => {
             if (!err) return;
             // Une erreur de l'outil de mise à jour (ex. « APPIMAGE env is not defined » hors AppImage,
             // réseau, flux de releases absent) ne doit JAMAIS arrêter le launcher tant qu'aucun
             // téléchargement n'est en cours : on journalise et on continue le démarrage.
             console.error('Erreur de mise à jour :', err.message || err);
-            if (this.updateDownloading) return this.shutdown(`${err.message}`);
+            if (this.updateDownloading) return this.shutdown(esc(err.message));
             return this.maintenanceCheck();
         })
 
-        ipcRenderer.on('download-progress', (event, progress) => {
-            ipcRenderer.send('update-window-progress', { progress: progress.transferred, size: progress.total })
+        api.onDownloadProgress((progress) => {
+            api.progress(progress.transferred, progress.total);
             this.setProgress(progress.transferred, progress.total);
         })
 
-        ipcRenderer.on('update-not-available', () => {
+        api.onUpdateNotAvailable(() => {
             console.error("Mise à jour non disponible");
             this.maintenanceCheck();
         })
@@ -112,17 +145,18 @@ class Splash {
     async dowloadUpdate() {
         // Ne JAMAIS laisser l'écran figé sur « Mise à jour disponible ! » : toute erreur (réseau, limite
         // de débit de l'API GitHub, asset absent) retombe sur la page des releases + bouton « Continuer ».
-        const repoURL = pkg.repository.url.replace("git+", "").replace(".git", "").replace("https://github.com/", "").split("/");
+        const b = await boot;
+        const repoURL = b.repositoryUrl.replace("git+", "").replace(".git", "").replace("https://github.com/", "").split("/");
         const releasesPage = `https://github.com/${repoURL[0]}/${repoURL[1]}/releases/latest`;
         let url = releasesPage;
         try {
-            const res = await nodeFetch(`https://api.github.com/repos/${repoURL[0]}/${repoURL[1]}/releases/latest`);
+            const res = await fetch(`https://api.github.com/repos/${repoURL[0]}/${repoURL[1]}/releases/latest`);
             if (res.ok) {
                 const latestRelease = await res.json();
                 const assets = Array.isArray(latestRelease.assets) ? latestRelease.assets : [];
                 let found;
-                if (os.platform() == 'darwin') found = this.getLatestReleaseForOS('mac', '.dmg', assets);
-                else if (os.platform() == 'linux') found = this.getLatestReleaseForOS('linux', '.appimage', assets);
+                if (b.platform == 'darwin') found = this.getLatestReleaseForOS('mac', '.dmg', assets);
+                else if (b.platform == 'linux') found = this.getLatestReleaseForOS('linux', '.appimage', assets);
                 if (found && found.browser_download_url) url = found.browser_download_url;
             } else {
                 console.error("Releases GitHub indisponibles :", res.status);
@@ -135,7 +169,7 @@ class Splash {
         const dl = document.querySelector(".download-update:not(.skip-update)");
         const skip = document.querySelector(".skip-update");
         if (dl) dl.addEventListener("click", () => {
-            openExternal(url);
+            api.openExternal(url);
             return this.shutdown("Téléchargement en cours...");
         });
         if (skip) skip.addEventListener("click", () => this.maintenanceCheck());
@@ -153,15 +187,15 @@ class Splash {
             this.startLauncher();
         }).catch(e => {
             console.error(e);
-            return this.shutdown(`Erreur de connexion:<br>${e.message || String(e)}`);
+            return this.shutdown(`Erreur de connexion:<br>${esc(e.message || String(e))}`);
         })
     }
 
 
     startLauncher() {
         this.setStatus(`Démarrage du launcher`);
-        ipcRenderer.send('main-window-open');
-        ipcRenderer.send('update-window-close');
+        api.openMainWindow();
+        api.closeWindow();
     }
 
     shutdown(text) {
@@ -169,7 +203,7 @@ class Splash {
         let i = 4;
         setInterval(() => {
             this.setStatus(`${text}<br>Arrêt dans ${i--}s`);
-            if (i < 0) ipcRenderer.send('update-window-close');
+            if (i < 0) api.closeWindow();
         }, 1000);
     }
 
@@ -193,7 +227,7 @@ function sleep(ms) {
 
 document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.shiftKey && e.keyCode == 73 || e.keyCode == 123) {
-        ipcRenderer.send("update-window-dev-tools");
+        api.devTools();
     }
 })
 

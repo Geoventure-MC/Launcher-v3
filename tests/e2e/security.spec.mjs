@@ -1,6 +1,7 @@
 // Audit sécurité 2026-10-15 : garde de navigation, CSP, XSS (panel / Azuriom), noms de fichiers de mods,
 // Azuriom en panne au démarrage, échec de lancement géré. Assertions indépendantes de la langue.
 import { test, expect } from '@playwright/test';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { startMock } from './mock-panel.mjs';
@@ -151,6 +152,30 @@ test.describe('fichiers de mods', () => {
       const noted = JSON.parse(fs.readFileSync(dir + '/launcher_config/community_mods.json', 'utf8'));
       expect(noted).toEqual(['good.jar']);
       expect(fs.existsSync(path.resolve(dir, 'mods', '../../evil.jar'))).toBeFalsy();
+    } finally { await L.close(); }
+  });
+});
+
+test.describe('intégrité des mods communauté', () => {
+  test('http hors boucle locale et empreinte différente : rien n\'est écrit', async () => {
+    mock.setCommunityMods([
+      { name: 'Sans https', description: 'x', url: 'http://mods.example.invalid/a.jar', filename: 'a.jar' },
+      { name: 'Mauvaise empreinte', description: 'x', url: `${mock.url}__jar/good.jar`, filename: 'b.jar', sha256: '0'.repeat(64) },
+      { name: 'Bonne empreinte', description: 'x', url: `${mock.url}__jar/good.jar`, filename: 'c.jar', sha1: crypto.createHash('sha1').update(Buffer.from('PK\x03\x04community-jar')).digest('hex') },
+    ]);
+    const L = await launchLauncher(mock, { prepare: (home) => installGame(home, 'geoventure') });
+    try {
+      await panelActive(L.win, 'home');
+      const dir = gameDirFor(L.home, 'geoventure');
+      await openSettings(L.win, 'community');
+      const list = L.win.locator('#community-mods-list');
+      await expect(list).toContainText('Sans https');
+      for (const name of ['Sans https', 'Mauvaise empreinte', 'Bonne empreinte']) {
+        await list.locator('.mods-container', { hasText: name }).locator('.community-mod-btn').click();
+      }
+      await expect.poll(() => fs.existsSync(dir + '/mods/c.jar')).toBeTruthy();
+      expect(fs.existsSync(dir + '/mods/a.jar')).toBeFalsy();
+      expect(fs.existsSync(dir + '/mods/b.jar')).toBeFalsy();
     } finally { await L.close(); }
   });
 });

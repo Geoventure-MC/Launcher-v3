@@ -106,7 +106,7 @@ class Login {
         window.dispatchEvent(new CustomEvent('nexus:account-updated', { detail: { account } }));
         if (!canAccessChannel(getSelectedChannel(), account, this.config) || (this.config.whitelist_activate &&
             (!this.config.whitelist.includes(account.name) &&
-                !this.config.whitelist_roles.includes(account.user_info.role.name)))) {
+                !(this.config.whitelist_roles || []).includes(account.user_info?.role?.name)))) {
             playBtn.style.backgroundColor = "#696969";
             playBtn.style.pointerEvents = "none";
             playBtn.style.boxShadow = "none";

@@ -414,7 +414,9 @@ class Settings {
         for (const localMod in localModsConfig) {
             if (!apiModsSet.has(localMod)) {
                 if (!localModsConfig[localMod]) {
-                    const modFiles = fs.readdirSync(modsDir).filter(file => file.startsWith(localMod) && file.endsWith('.jar-disable'));
+                    // Correspondance exacte (findModFile) : un préfixe (`create`) réactivait aussi `createaddition-….jar-disable`.
+                    const found = findModFile(fs.readdirSync(modsDir), localMod);
+                    const modFiles = found && found.endsWith('.jar-disable') ? [found] : [];
                     if (modFiles.length > 0) {
                         const modFile = modFiles[0];
                         const modFilePath = path.join(modsDir, modFile);
@@ -649,7 +651,7 @@ class Settings {
         let account = accountRec.value;
 
         let title = document.querySelector('.player-skin-title');
-        if (title) title.innerHTML = `Skin de ${account.name}`;
+        if (title) title.textContent = `Skin de ${account.name}`;
 
         const skin = document.querySelector('.skin-renderer-settings');
         if (!skin) return;
@@ -1350,9 +1352,20 @@ class Settings {
                             try {
                                 if (!fs.existsSync(modsDir)) fs.mkdirSync(modsDir, { recursive: true });
                                 const nodeFetch = require('node-fetch');
+                                // Un .jar est du code exécuté par le jeu : https obligatoire (boucle locale tolérée pour
+                                // les tests), y compris après redirection.
+                                const isSecure = (u) => { const x = new URL(u); return x.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(x.hostname); };
+                                if (!isSecure(modUrl)) throw new Error('téléchargement refusé : https obligatoire');
                                 const fileRes = await nodeFetch(modUrl);
                                 if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
+                                if (!isSecure(fileRes.url || modUrl)) throw new Error('redirection refusée : https obligatoire');
                                 const buffer = await fileRes.buffer();
+                                // Empreinte facultative donnée par le panel (sha256 ou sha1 en hexadécimal) : vérifiée avant écriture.
+                                const expected = String(mod.sha256 || mod.sha1 || mod.hash || '').trim().toLowerCase();
+                                if (expected) {
+                                    const algo = expected.length === 64 ? 'sha256' : expected.length === 40 ? 'sha1' : null;
+                                    if (!algo || crypto.createHash(algo).update(buffer).digest('hex') !== expected) throw new Error('empreinte du fichier différente de celle du panel');
+                                }
                                 // Le contenu doit être une archive (jar = zip) : une page d'erreur HTML n'est jamais écrite.
                                 if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) throw new Error('fichier reçu invalide (pas un .jar)');
                                 fs.writeFileSync(modFilePath, buffer);

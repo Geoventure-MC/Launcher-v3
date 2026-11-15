@@ -5,8 +5,7 @@
  *
  * Edited by CentralCorp Team
  */
-const { app, ipcMain, nativeTheme, dialog } = require('electron');
-const { Microsoft } = require('minecraft-java-core-azbetter');
+const { app, ipcMain, nativeTheme, dialog, shell } = require('electron');
 const { autoUpdater } = require('electron-updater')
 
 const path = require('path');
@@ -47,35 +46,58 @@ if (!gotLock) {
     });
 }
 
+// Fenêtre vivante ou null : un message IPC reçu pendant la fermeture ou l'ouverture d'une fenêtre ne doit
+// pas lever une TypeError dans le processus principal (boîte d'erreur Electron).
+const live = (w) => (w && !w.isDestroyed() ? w : null);
+const main = () => live(MainWindow.getWindow());
+const upd = () => live(UpdateWindow.getWindow());
+
+// Canaux de la fenêtre de mise à jour isolée (sandbox) : init, config du panel, ouverture du navigateur.
+require('./assets/js/utils/splash-ipc.js').install({
+    ipcMain, shell,
+    pkg: require('../package.json'),
+    translationsDir: path.join(__dirname, 'assets', 'translations'),
+    openExternalSafe: require('./assets/js/utils/window-guard.js').openExternalSafe,
+});
+
 ipcMain.on('update-window-close', () => UpdateWindow.destroyWindow())
-ipcMain.on('update-window-dev-tools', () => UpdateWindow.getWindow().webContents.openDevTools())
+ipcMain.on('update-window-dev-tools', () => { const w = upd(); if (w) w.webContents.openDevTools() })
+// Barre de progression de l'icône pendant la mise à jour (envoyée par index.js : jusqu'ici sans écouteur).
+ipcMain.on('update-window-progress-load', () => { const w = upd(); if (w) w.setProgressBar(2, { mode: 'indeterminate' }) })
+ipcMain.on('update-window-progress', (event, options) => {
+    const w = upd();
+    const ratio = options && Number(options.progress) / Number(options.size);
+    if (w && Number.isFinite(ratio)) w.setProgressBar(Math.min(Math.max(ratio, 0), 1));
+})
 ipcMain.on('main-window-open', () => MainWindow.createWindow())
-ipcMain.on('main-window-dev-tools', () => MainWindow.getWindow().webContents.openDevTools())
+ipcMain.on('main-window-dev-tools', () => { const w = main(); if (w) w.webContents.openDevTools() })
 ipcMain.on('main-window-close', () => MainWindow.destroyWindow())
-ipcMain.on('main-window-progress', (event, options) => MainWindow.getWindow().setProgressBar(options.DL / options.totDL))
-ipcMain.on('main-window-progress-reset', () => MainWindow.getWindow().setProgressBar(0))
-ipcMain.on('main-window-minimize', () => MainWindow.getWindow().minimize())
+ipcMain.on('main-window-progress', (event, options) => {
+    const w = main();
+    const ratio = options && Number(options.DL) / Number(options.totDL);
+    if (w && Number.isFinite(ratio)) w.setProgressBar(Math.min(Math.max(ratio, 0), 1));
+})
+ipcMain.on('main-window-progress-reset', () => { const w = main(); if (w) w.setProgressBar(0) })
+ipcMain.on('main-window-minimize', () => { const w = main(); if (w) w.minimize() })
 
 ipcMain.on('main-window-maximize', () => {
-    if (MainWindow.getWindow().isMaximized()) {
-        MainWindow.getWindow().unmaximize();
+    const w = main();
+    if (!w) return;
+    if (w.isMaximized()) {
+        w.unmaximize();
     } else {
-        MainWindow.getWindow().maximize();
+        w.maximize();
     }
 })
 
-ipcMain.on('main-window-hide', () => MainWindow.getWindow().hide())
-ipcMain.on('main-window-show', () => MainWindow.getWindow().show())
-ipcMain.on('main-window-reload', () => MainWindow.getWindow().webContents.reload())
+ipcMain.on('main-window-hide', () => { const w = main(); if (w) w.hide() })
+ipcMain.on('main-window-show', () => { const w = main(); if (w) w.show() })
+ipcMain.on('main-window-reload', () => { const w = main(); if (w) w.webContents.reload() })
 
 ipcMain.handle('is-dark-theme', (_, theme) => {
     if (theme === 'dark') return true
     if (theme === 'light') return false
     return nativeTheme.shouldUseDarkColors;
-})
-
-ipcMain.handle('Microsoft-window', async (event, client_id) => {
-    return await new Microsoft(client_id).getAuth();
 })
 
 // Save-dialog for the in-app game console "Export" button. Returns the chosen

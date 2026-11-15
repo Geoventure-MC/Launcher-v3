@@ -34,7 +34,9 @@ function createWindow() {
         icon: `./src/assets/images/icon.${os.platform() === "win32" ? "ico" : "png"}`,
         frame: false,
         show: false,
-        // nodeIntegration reste nécessaire : tout le rendu utilise require()/ipcRenderer. Les défenses sont
+        // nodeIntegration reste nécessaire ICI (contrairement à la fenêtre de mise à jour, isolée) : les panneaux
+        // lancent Minecraft et lisent le disque directement depuis le rendu (minecraft-java-core, fs, child_process,
+        // IndexedDB). L'isoler exige de déplacer tout cela dans le processus principal. Les défenses sont
         // ailleurs : garde de navigation (utils/window-guard.js), CSP dans le HTML, aucun Node dans les
         // iframes (skin 3D, YouTube), pas de <webview>, pas de navigation par glisser-déposer.
         webPreferences: {

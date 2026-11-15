@@ -165,11 +165,96 @@ index b8f5c63..3212f02 100644
              file.folder = file.path.split('/').slice(0, -1).join('/');
              // Vérifie si une version désactivée de ce fichier existe
              const disabledPath = `${file.path}-disable`;
+diff --git a/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Java.js b/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Java.js
+index 8675f57..0e17940 100644
+--- a/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Java.js
++++ b/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Java.js
+@@ -13,6 +13,19 @@ const fs_1 = __importDefault(require("fs"));
+ const events_1 = __importDefault(require("events"));
+ const Index_js_1 = require("../utils/Index.js");
+ const Downloader_js_1 = __importDefault(require("../utils/Downloader.js"));
++const crypto_1 = __importDefault(require("crypto"));
++// Chemin d'une entrée d'archive CONFINÉ au dossier de destination (anti « zip slip » : « ../../x » ne sort jamais).
++function safeEntryPath(folder, name) {
++    const root = path_1.default.resolve(folder);
++    const target = path_1.default.resolve(root, String(name));
++    if (target !== root && !target.startsWith(root + path_1.default.sep)) {
++        throw new Error(`Archive refusée : entrée hors du dossier de destination (${String(name).slice(0, 120)})`);
++    }
++    return target;
++}
++function sha256File(file) {
++    return crypto_1.default.createHash('sha256').update(fs_1.default.readFileSync(file)).digest('hex');
++}
+ /**
+  * Manages the download and extraction of the correct Java runtime for Minecraft.
+  * It supports both Mojang's curated list of Java runtimes and the Adoptium fallback.
+@@ -128,21 +141,47 @@ class JavaDownloader extends events_1.default {
+             }
+         }
+         if (!fs_1.default.existsSync(javaExePath)) {
+-            await this.verifyAndDownloadFile({
+-                filePath: path_1.default.join(pathFolder, javaVersions.name),
++            const zipPath = path_1.default.join(pathFolder, javaVersions.name);
++            // Empreinte SHA-256 officielle d'Azul (fiche détaillée du paquet) : le zip est contrôlé AVANT d'être extrait
++            // et exécuté. Introuvable (API muette) : on continue avec un avertissement ; différente : on refuse.
++            let expectedSha256 = null;
++            try {
++                if (javaVersions.package_uuid) {
++                    const details = await fetch(`https://api.azul.com/metadata/v1/zulu/packages/${encodeURIComponent(javaVersions.package_uuid)}`).then(res => res.ok ? res.json() : null);
++                    if (details && typeof details.sha256_hash === 'string')
++                        expectedSha256 = details.sha256_hash.toLowerCase();
++                }
++            }
++            catch (_) { }
++            if (!expectedSha256)
++                console.warn('[java] empreinte SHA-256 Azul introuvable : archive non vérifiée');
++            const download = () => this.verifyAndDownloadFile({
++                filePath: zipPath,
+                 pathFolder: pathFolder,
+                 fileName: javaVersions.name,
+                 url: javaVersions.download_url
+             });
+-            const entries = await (0, Index_js_1.getFileFromArchive)(path_1.default.join(pathFolder, javaVersions.name), null, null, true);
++            await download();
++            if (expectedSha256 && sha256File(zipPath) !== expectedSha256) {
++                // Zip déjà présent mais tronqué ou altéré : une nouvelle tentative, puis refus.
++                fs_1.default.rmSync(zipPath, { force: true });
++                await download();
++                if (sha256File(zipPath) !== expectedSha256) {
++                    fs_1.default.rmSync(zipPath, { force: true });
++                    throw new Error("Java : empreinte SHA-256 de l'archive différente de celle d'Azul, installation refusée");
++                }
++            }
++            const entries = await (0, Index_js_1.getFileFromArchive)(zipPath, null, null, true);
+             for (const entry of entries) {
+                 if (entry.name.startsWith('META-INF'))
+                     continue;
++                const dest = safeEntryPath(pathFolder, entry.name);
+                 if (entry.isDirectory) {
+-                    fs_1.default.mkdirSync(`${pathFolder}/${entry.name}`, { recursive: true, mode: 0o777 });
++                    fs_1.default.mkdirSync(dest, { recursive: true, mode: 0o777 });
+                     continue;
+                 }
+-                fs_1.default.writeFileSync(`${pathFolder}/${entry.name}`, entry.data, { mode: 0o777 });
++                fs_1.default.mkdirSync(path_1.default.dirname(dest), { recursive: true, mode: 0o777 });
++                fs_1.default.writeFileSync(dest, entry.data, { mode: 0o777 });
+             }
+             if (platform === 'macos') {
+                 try {
 diff --git a/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Libraries.js b/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Libraries.js
-index 2344725..5706d77 100644
+index 2344725..c5881e1 100644
 --- a/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Libraries.js
 +++ b/node_modules/minecraft-java-core-azbetter/build/Minecraft/Minecraft-Libraries.js
-@@ -112,10 +112,21 @@ class Libraries {
+@@ -9,6 +9,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
+ Object.defineProperty(exports, "__esModule", { value: true });
+ const os_1 = __importDefault(require("os"));
+ const fs_1 = __importDefault(require("fs"));
++const path_1 = __importDefault(require("path"));
+ const Index_js_1 = require("../utils/Index.js");
+ /**
+  * Maps Node.js platforms to Mojang's naming scheme for OS in library natives.
+@@ -112,10 +113,21 @@ class Libraries {
          if (!url)
              return [];
          const response = await fetch(url);
@@ -193,24 +278,60 @@ index 2344725..5706d77 100644
                  continue;
              // The 'type' is deduced from the first part of the path
              const fileType = asset.path.split('/')[0];
+@@ -157,12 +169,18 @@ class Libraries {
+             for (const entry of entries) {
+                 if (entry.name.startsWith('META-INF'))
+                     continue;
++                // Anti « zip slip » : une entrée « ../../x » ne doit jamais écrire hors du dossier natives.
++                const root = path_1.default.resolve(nativesFolder);
++                const dest = path_1.default.resolve(root, String(entry.name));
++                if (dest !== root && !dest.startsWith(root + path_1.default.sep))
++                    throw new Error(`Archive refusée : entrée hors du dossier natives (${String(entry.name).slice(0, 120)})`);
+                 if (entry.isDirectory) {
+-                    fs_1.default.mkdirSync(`${nativesFolder}/${entry.name}`, { recursive: true, mode: 0o777 });
++                    fs_1.default.mkdirSync(dest, { recursive: true, mode: 0o777 });
+                     continue;
+                 }
++                fs_1.default.mkdirSync(path_1.default.dirname(dest), { recursive: true, mode: 0o777 });
+                 // Write the file to the natives folder
+-                fs_1.default.writeFileSync(`${nativesFolder}/${entry.name}`, entry.data, { mode: 0o777 });
++                fs_1.default.writeFileSync(dest, entry.data, { mode: 0o777 });
+             }
+         }
+         return natives;
 diff --git a/node_modules/minecraft-java-core-azbetter/build/utils/Downloader.js b/node_modules/minecraft-java-core-azbetter/build/utils/Downloader.js
-index 1487c7d..65682f2 100644
+index 1487c7d..5e4a597 100644
 --- a/node_modules/minecraft-java-core-azbetter/build/utils/Downloader.js
 +++ b/node_modules/minecraft-java-core-azbetter/build/utils/Downloader.js
-@@ -8,6 +8,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
+@@ -8,8 +8,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
  };
  Object.defineProperty(exports, "__esModule", { value: true });
  const fs_1 = __importDefault(require("fs"));
 +const crypto_1 = __importDefault(require("crypto"));
  const events_1 = require("events");
  const Index_js_1 = require("./Index.js");
++// Tout ce qui est téléchargé (mods, jars, Java) finit exécuté : https obligatoire (boucle locale tolérée pour les tests).
++function assertSecureUrl(url) {
++    let u;
++    try {
++        u = new URL(String(url));
++    }
++    catch (_) {
++        throw new Error(`URL de téléchargement invalide : ${String(url).slice(0, 120)}`);
++    }
++    if (u.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))
++        throw new Error(`Téléchargement refusé (https obligatoire) : ${u.protocol}//${u.hostname}`);
++}
  /**
-@@ -27,28 +28,45 @@ class Downloader extends events_1.EventEmitter {
+  * A class responsible for downloading single or multiple files,
+  * emitting events for progress, speed, estimated time, and errors.
+@@ -27,28 +40,46 @@ class Downloader extends events_1.EventEmitter {
          if (!fs_1.default.existsSync(dirPath)) {
              fs_1.default.mkdirSync(dirPath, { recursive: true });
          }
 -        const writer = fs_1.default.createWriteStream(`${dirPath}/${fileName}`);
 +        const target = `${dirPath}/${fileName}`;
++        assertSecureUrl(url);
          const response = await fetch(url);
 +        // Une page d'erreur (404/502 HTML) n'est jamais enregistrée comme fichier.
 +        if (!response.ok || !response.body)
@@ -259,7 +380,7 @@ index 1487c7d..65682f2 100644
          });
      }
      /**
-@@ -56,6 +74,11 @@ class Downloader extends events_1.EventEmitter {
+@@ -56,6 +87,11 @@ class Downloader extends events_1.EventEmitter {
       * Emits "progress" events with cumulative bytes downloaded vs. total size,
       * as well as "speed" and "estimated" events for speed and ETA calculations.
       *
@@ -271,7 +392,7 @@ index 1487c7d..65682f2 100644
       * @param files - An array of DownloadOptions describing each file
       * @param size - The total size (in bytes) of all files to be downloaded
       * @param limit - The maximum number of simultaneous downloads
-@@ -64,6 +87,7 @@ class Downloader extends events_1.EventEmitter {
+@@ -64,6 +100,7 @@ class Downloader extends events_1.EventEmitter {
      async downloadFileMultiple(files, size, limit = 1, timeout = 10000) {
          if (limit > files.length)
              limit = files.length;
@@ -279,7 +400,7 @@ index 1487c7d..65682f2 100644
          let completed = 0; // Number of downloads completed
          let downloaded = 0; // Cumulative bytes downloaded
          let queued = 0; // Index of the next file to download
-@@ -83,59 +107,83 @@ class Downloader extends events_1.EventEmitter {
+@@ -83,59 +120,89 @@ class Downloader extends events_1.EventEmitter {
              start = Date.now();
              before = downloaded;
          }, 500);
@@ -298,9 +419,6 @@ index 1487c7d..65682f2 100644
 +            let idle;
              const controller = new AbortController();
 -            const timeoutId = setTimeout(() => controller.abort(), timeout);
--            try {
--                const response = await fetch(file.url, { signal: controller.signal });
--                clearTimeout(timeoutId);
 +            const done = (reason) => {
 +                if (settled)
 +                    return;
@@ -320,6 +438,14 @@ index 1487c7d..65682f2 100644
 +                clearTimeout(idle);
 +                idle = setTimeout(() => done(`aucune donnée depuis ${Math.round(ms / 1000)} s`), ms);
 +            };
+             try {
+-                const response = await fetch(file.url, { signal: controller.signal });
+-                clearTimeout(timeoutId);
++                assertSecureUrl(file.url);
++            }
++            catch (e) {
++                return done(e.message);
++            }
 +            arm(timeout);
 +            fetch(file.url, { signal: controller.signal }).then((response) => {
 +                if (settled)
@@ -404,7 +530,7 @@ index 1487c7d..65682f2 100644
      }
      /**
       * Performs a HEAD request on the given URL to check if it is valid (status=200)
-@@ -189,5 +237,7 @@ class Downloader extends events_1.EventEmitter {
+@@ -189,5 +256,7 @@ class Downloader extends events_1.EventEmitter {
          return false;
      }
  }
