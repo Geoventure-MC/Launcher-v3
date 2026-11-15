@@ -172,4 +172,31 @@
             </div>
         </div>
     </div>
+
+    <!-- Crash Reporter Modal -->
+    <div class="crash-modal-overlay" id="crash-modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="crash-modal-title">
+        <div class="crash-modal">
+            <div class="crash-modal-head">
+                <span class="crash-modal-icon" aria-hidden="true">&#9888;&#65039;</span>
+                <div>
+                    <h2 id="crash-modal-title"></h2>
+                    <div class="crash-modal-meta">
+                        <span class="crash-exit-badge" id="crash-exit-badge"></span>
+                        <span class="crash-source-label" id="crash-source-label"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="crash-summary-box">
+                <div class="crash-cause-title" id="crash-cause-title"></div>
+                <p class="crash-cause-summary" id="crash-cause-summary"></p>
+                <p class="crash-cause-hint" id="crash-cause-hint"></p>
+            </div>
+            <pre class="crash-excerpt" id="crash-excerpt"></pre>
+            <div class="crash-modal-actions">
+                <button class="crash-btn-copy" id="crash-copy-btn" type="button"></button>
+                <button class="crash-btn-secondary" id="crash-logs-btn" type="button"></button>
+                <button class="crash-btn-close" id="crash-close-btn" type="button"></button>
+            </div>
+        </div>
+    </div>
 </div>

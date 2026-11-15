@@ -1089,6 +1089,14 @@ input:checked+.slider:before {
     font-size: 12px;
 }
 
+.java-jdk-select {
+    max-width: 420px;
+}
+
+.java-path-row {
+    flex-wrap: wrap;
+}
+
 .diag-output {
     display: block;
     width: min(100%, 640px);

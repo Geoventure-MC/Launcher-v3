@@ -9,6 +9,7 @@ import { database, changePanel, addAccount, accountSelect, showLoadingOverlay, h
 import { getAzAuthUrl } from '../utils/config.js';
 import { getSelectedChannel, canAccessChannel } from '../utils/instance.js';
 import { openExternal } from '../utils/external.js';
+import { sendErrorEvent } from '../utils/telemetry.js';
 const { AZauth } = require('minecraft-java-core-azbetter');
 const { ipcRenderer, shell } = require('electron');
 const pkg = require('../package.json');
@@ -277,6 +278,11 @@ class Login {
                 : await azAuth.login(elements.mailInput.value, elements.passwordInput.value);
 
             if (account_connect.error) {
+                sendErrorEvent('azuriom_auth_error', {
+                    stage: 'login',
+                    reason: String(account_connect.reason || 'auth_rejected'),
+                    a2f: !!a2fCode,
+                });
                 if (account_connect.reason === 'user_banned') {
                     elements.infoLogin.innerHTML = t('account_banned');
                 } else if (account_connect.reason === 'invalid_credentials') {
@@ -312,6 +318,11 @@ class Login {
             elements.infoLogin.innerHTML = "&nbsp;";
         } catch (err) {
             console.error(err);
+            sendErrorEvent('azuriom_auth_error', {
+                stage: 'login',
+                reason: err && err.message ? err.message : 'connection_error',
+                a2f: !!a2fCode,
+            });
             elements.infoLogin.innerHTML = t('connection_error');
             this.enableLoginForm(elements);
         }

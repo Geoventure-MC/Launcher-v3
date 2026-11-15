@@ -157,6 +157,36 @@
                         <label for="desktop-notifications" id="desktop-notifications-label">Notifications de bureau (annonces, serveurs)</label>
                     </div>
                 </div>
+                <div class="advanced-section" id="java-section">
+                    <h3 id="java-title">Java / JDK</h3>
+                    <div class="repair-info" id="java-info"></div>
+                    <div class="perf-row">
+                        <label for="java-jdk-select" id="java-jdk-label"></label>
+                        <select id="java-jdk-select" class="resolution-select java-jdk-select">
+                            <option value="" id="java-jdk-auto-option"></option>
+                        </select>
+                    </div>
+                    <div class="perf-row java-path-row">
+                        <label for="java-path-input" id="java-path-label"></label>
+                        <input type="text" id="java-path-input" class="resolution-input perf-jvm-input" readonly spellcheck="false" autocomplete="off">
+                    </div>
+                    <div class="diag-actions">
+                        <button class="btn-advanced" id="java-browse-btn" type="button">
+                            <i class="fas fa-folder-open"></i>
+                            <span id="java-browse-text"></span>
+                        </button>
+                        <button class="btn-advanced" id="java-detect-btn" type="button">
+                            <i class="fas fa-search"></i>
+                            <span id="java-detect-text"></span>
+                        </button>
+                        <button class="btn-advanced" id="java-reset-btn" type="button">
+                            <i class="fas fa-undo"></i>
+                            <span id="java-reset-text"></span>
+                        </button>
+                    </div>
+                    <div class="perf-warnings" id="java-warning" style="display: none;"></div>
+                    <div class="repair-status" id="java-status" style="display: none;"></div>
+                </div>
                 <div class="advanced-section" id="perf-section">
                     <h3 id="perf-title">Performances</h3>
                     <div class="repair-info" id="perf-info"></div>

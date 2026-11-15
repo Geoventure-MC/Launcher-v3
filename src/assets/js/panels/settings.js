@@ -15,6 +15,7 @@ import { withInstance } from '../utils/instance.js';
 import { getAzAuthUrl } from '../utils/config.js';
 import { toGb, recommendProfile, buildProfile, sanitizeJvmArgs, PROFILE_IDS, launchRamMaxGb } from '../utils/perf.js';
 import { collectDiagnostic } from '../utils/diagnostic.js';
+import { isValidJavaBinary, probeJavaVersion, detectInstalledJdks, formatJavaLabel } from '../utils/java.js';
 import { isUserPath } from '../utils/userdata.js';
 import { openExternal } from '../utils/external.js';
 import { safeModFileName, findModFile, modTargetName, recordCommunityMod } from '../utils/mods.js';
@@ -843,6 +844,172 @@ class Settings {
         this.initResolution();
         this.initTelemetryConsent();
         this.initDesktopNotifications();
+        this.initJavaSelector();
+    }
+
+    async _saveJavaPath(javaPath) {
+        const val = javaPath && typeof javaPath === 'string' ? javaPath : false;
+        const existing = await this.database.get('1234', 'java-path');
+        if (existing) {
+            await this.database.update({ uuid: '1234', path: val }, 'java-path');
+        } else {
+            await this.database.add({ uuid: '1234', path: val }, 'java-path');
+        }
+    }
+
+    _updateJavaWarning(info) {
+        const warnEl = document.getElementById('java-warning');
+        if (!warnEl) return;
+        if (info && info.major && info.major !== 17) {
+            warnEl.textContent = (t('java_warn_not_17') || 'Attention : ce binaire est en Java {major}. Minecraft 1.20.1 / Forge nécessite Java 17.')
+                .replace('{major}', String(info.major));
+            warnEl.style.display = 'block';
+        } else {
+            warnEl.textContent = '';
+            warnEl.style.display = 'none';
+        }
+    }
+
+    _setJavaStatus(msg, kind = '') {
+        const statusEl = document.getElementById('java-status');
+        if (!statusEl) return;
+        statusEl.className = 'repair-status' + (kind === 'ok' ? ' repair-status-ok' : kind === 'error' ? ' repair-status-error' : '');
+        statusEl.textContent = msg || '';
+        statusEl.style.display = msg ? 'flex' : 'none';
+    }
+
+    refreshJavaOptions(currentPath) {
+        const select = document.getElementById('java-jdk-select');
+        if (!select) return [];
+        const jdks = detectInstalledJdks({ gameDir: this.gameDir() });
+        this._detectedJdks = jdks;
+
+        while (select.firstChild) select.removeChild(select.firstChild);
+        const autoOpt = document.createElement('option');
+        autoOpt.value = '';
+        autoOpt.textContent = t('java_jdk_auto') || 'Automatique (géré par le launcher)';
+        select.appendChild(autoOpt);
+
+        let matched = false;
+        for (const jdk of jdks) {
+            const opt = document.createElement('option');
+            opt.value = jdk.path;
+            opt.textContent = jdk.label;
+            if (currentPath && jdk.path.toLowerCase() === String(currentPath).toLowerCase()) {
+                matched = true;
+            }
+            select.appendChild(opt);
+        }
+
+        if (currentPath && typeof currentPath === 'string' && !matched) {
+            const probed = probeJavaVersion(currentPath);
+            const customOpt = document.createElement('option');
+            customOpt.value = currentPath;
+            customOpt.textContent = probed
+                ? `${t('java_jdk_custom') || 'Chemin personnalisé'} — ${formatJavaLabel(probed)}`
+                : (t('java_jdk_custom') || 'Chemin personnalisé');
+            select.appendChild(customOpt);
+            if (probed) this._updateJavaWarning(probed);
+        } else if (currentPath) {
+            const hit = jdks.find(j => j.path.toLowerCase() === String(currentPath).toLowerCase());
+            this._updateJavaWarning(hit || null);
+        } else {
+            this._updateJavaWarning(null);
+        }
+
+        select.value = (currentPath && typeof currentPath === 'string') ? currentPath : '';
+        return jdks;
+    }
+
+    async initJavaSelector() {
+        const select = document.getElementById('java-jdk-select');
+        const pathInput = document.getElementById('java-path-input');
+        const browseBtn = document.getElementById('java-browse-btn');
+        const detectBtn = document.getElementById('java-detect-btn');
+        const resetBtn = document.getElementById('java-reset-btn');
+        if (!select || !pathInput) return;
+
+        const setTxt = (id, key, fallback) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = t(key) || fallback;
+        };
+        setTxt('java-title', 'java_title', 'Java / JDK');
+        setTxt('java-info', 'java_info', 'Choisissez l’exécutable Java (JDK 17 requis pour Forge 1.20.1) ou laissez le launcher gérer automatiquement.');
+        setTxt('java-jdk-label', 'java_jdk_label', 'Version détectée');
+        setTxt('java-path-label', 'java_path_label', 'Exécutable');
+        setTxt('java-browse-text', 'java_browse_btn', 'Parcourir…');
+        setTxt('java-detect-text', 'java_detect_btn', 'Détecter les JDK 17');
+        setTxt('java-reset-text', 'java_reset_btn', 'Réinitialiser');
+        pathInput.placeholder = t('java_path_placeholder') || 'Automatique (javaw.exe / java géré par le launcher)';
+
+        const rec = await this.database.get('1234', 'java-path');
+        const savedPath = rec && rec.value && typeof rec.value.path === 'string' && rec.value.path ? rec.value.path : '';
+        pathInput.value = savedPath;
+        this.refreshJavaOptions(savedPath);
+
+        if (savedPath && !isValidJavaBinary(savedPath)) {
+            this._setJavaStatus(t('java_error_invalid') || 'Fichier invalide : sélectionnez javaw.exe, java.exe ou java.', 'error');
+        }
+
+        select.addEventListener('change', async () => {
+            const chosen = select.value;
+            if (!chosen) {
+                await this._saveJavaPath(false);
+                pathInput.value = '';
+                this._updateJavaWarning(null);
+                this._setJavaStatus(t('java_status_reset') || 'Java réinitialisé sur Automatique.', 'ok');
+                return;
+            }
+            if (!isValidJavaBinary(chosen)) {
+                this._setJavaStatus(t('java_error_invalid') || 'Fichier invalide : sélectionnez javaw.exe, java.exe ou java.', 'error');
+                return;
+            }
+            await this._saveJavaPath(chosen);
+            pathInput.value = chosen;
+            const info = (this._detectedJdks || []).find(j => j.path === chosen) || probeJavaVersion(chosen);
+            this._updateJavaWarning(info);
+            this._setJavaStatus(t('java_status_saved') || 'Exécutable Java enregistré.', 'ok');
+        });
+
+        if (browseBtn) {
+            browseBtn.addEventListener('click', async () => {
+                const res = await ipcRenderer.invoke('select-java-dialog');
+                if (!res || res.canceled) return;
+                if (res.error || !res.path || !isValidJavaBinary(res.path)) {
+                    this._setJavaStatus(t('java_error_invalid') || 'Fichier invalide : sélectionnez javaw.exe, java.exe ou java.', 'error');
+                    return;
+                }
+                await this._saveJavaPath(res.path);
+                pathInput.value = res.path;
+                this.refreshJavaOptions(res.path);
+                this._setJavaStatus(t('java_status_saved') || 'Exécutable Java enregistré.', 'ok');
+            });
+        }
+
+        if (detectBtn) {
+            detectBtn.addEventListener('click', () => {
+                const jdks = this.refreshJavaOptions(pathInput.value);
+                const jdk17Count = jdks.filter(j => j.isJava17).length;
+                if (jdks.length === 0) {
+                    this._setJavaStatus(t('java_status_none') || 'Aucun JDK détecté sur le système.', '');
+                } else {
+                    const msg = (t('java_status_detected') || '{n} installation(s) Java détectée(s) (dont {jdk17} JDK 17).')
+                        .replace('{n}', String(jdks.length))
+                        .replace('{jdk17}', String(jdk17Count));
+                    this._setJavaStatus(msg, jdk17Count > 0 ? 'ok' : '');
+                }
+            });
+        }
+
+        if (resetBtn) {
+            resetBtn.addEventListener('click', async () => {
+                await this._saveJavaPath(false);
+                pathInput.value = '';
+                this.refreshJavaOptions('');
+                this._updateJavaWarning(null);
+                this._setJavaStatus(t('java_status_reset') || 'Java réinitialisé sur Automatique.', 'ok');
+            });
+        }
     }
 
     initDesktopNotifications() {

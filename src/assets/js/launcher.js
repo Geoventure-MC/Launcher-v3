@@ -15,6 +15,7 @@ const DiscordRPC = require('discord-rpc');
 import { config, logger, changePanel, database, addAccount, accountSelect, t } from './utils.js';
 import { getAzAuthUrl } from './utils/config.js';
 import { getSelectedChannel, canAccessChannel } from './utils/instance.js';
+import { sendErrorEvent } from './utils/telemetry.js';
 import Login from './panels/login.js';
 import Home from './panels/home.js';
 import Settings from './panels/settings.js';
@@ -181,6 +182,10 @@ class Launcher {
                         // Azuriom injoignable ou réponse non JSON (502 HTML) : on garde le compte en cache
                         // (mode hors ligne) au lieu de rester bloqué sur l'écran de chargement.
                         console.warn(`[Account] vérification impossible (${err && err.message ? err.message : err}) : compte en cache conservé`);
+                        sendErrorEvent('azuriom_auth_error', {
+                            stage: 'verify',
+                            reason: err && err.message ? err.message : 'verify_network_error',
+                        });
                         addAccount(account);
                         if (account.uuid === selectedAccount) accountSelect(account.uuid);
                         continue;
@@ -191,6 +196,10 @@ class Launcher {
                         this.database.delete(account.uuid, 'accounts');
                         if (account.uuid === selectedAccount) this.database.update({ uuid: "1234" }, 'accounts-selected');
                         console.error(`[Account] ${account.uuid}: ${refresh.errorMessage}`);
+                        sendErrorEvent('azuriom_auth_error', {
+                            stage: 'verify',
+                            reason: refresh.errorMessage || 'token_rejected',
+                        });
                         continue;
                     }
 

@@ -1,5 +1,5 @@
 diff --git a/node_modules/minecraft-java-core-azbetter/build/Launch.js b/node_modules/minecraft-java-core-azbetter/build/Launch.js
-index f2f6ce0..40d2441 100644
+index f2f6ce0..5938fc0 100644
 --- a/node_modules/minecraft-java-core-azbetter/build/Launch.js
 +++ b/node_modules/minecraft-java-core-azbetter/build/Launch.js
 @@ -80,7 +80,11 @@ class Launch extends events_1.EventEmitter {
@@ -15,7 +15,14 @@ index f2f6ce0..40d2441 100644
      }
      async start() {
          let data = await this.DownloadGame();
-@@ -121,7 +125,7 @@ class Launch extends events_1.EventEmitter {
+@@ -115,13 +119,13 @@ class Launch extends events_1.EventEmitter {
+         let minecraftDebug = (0, child_process_1.spawn)(java, Arguments, { cwd: logs, detached: this.options.detached });
+         minecraftDebug.stdout.on('data', (data) => this.emit('data', data.toString('utf-8')));
+         minecraftDebug.stderr.on('data', (data) => this.emit('data', data.toString('utf-8')));
+-        minecraftDebug.on('close', (code) => this.emit('close', 'Minecraft closed'));
++        minecraftDebug.on('close', (code) => this.emit('close', typeof code === 'number' ? code : (code ?? null)));
+     }
+     async DownloadGame() {
          let InfoVersion = await new Minecraft_Json_js_1.default(this.options).GetInfoVersion();
          let loaderJson = null;
          if ('error' in InfoVersion) {

@@ -111,6 +111,42 @@ ipcMain.handle('save-logs-dialog', async (_, defaultName) => {
     return res && !res.canceled ? res.filePath : null;
 })
 
+// Sélecteur natif sécurisé de binaire Java (javaw.exe / java.exe / java).
+// Valide dans le processus principal que la cible est un exécutable Java régulier.
+ipcMain.handle('select-java-dialog', async () => {
+    const win = MainWindow.getWindow();
+    const isWin = process.platform === 'win32';
+    const filters = isWin
+        ? [{ name: 'Exécutable Java (javaw.exe / java.exe)', extensions: ['exe'] }]
+        : [];
+    const defaultDir = isWin
+        ? [process.env.ProgramFiles, 'C:\\Program Files\\Java'].find(d => d && fs.existsSync(d))
+        : ['/usr/lib/jvm', '/Library/Java/JavaVirtualMachines'].find(d => fs.existsSync(d));
+    const res = await dialog.showOpenDialog(win, {
+        title: 'Sélectionner un exécutable Java (JDK 17 recommandé)',
+        defaultPath: defaultDir,
+        properties: ['openFile'],
+        filters,
+    });
+    if (!res || res.canceled || !Array.isArray(res.filePaths) || res.filePaths.length === 0) {
+        return { canceled: true };
+    }
+    const rawPath = String(res.filePaths[0] || '').trim();
+    const resolved = path.resolve(rawPath);
+    const base = path.basename(resolved);
+    if (!/^javaw?(\.exe)?$/i.test(base) || rawPath.startsWith('\\\\') || rawPath.startsWith('//')) {
+        return { canceled: false, error: 'invalid_java_binary' };
+    }
+    try {
+        if (!fs.statSync(resolved).isFile()) {
+            return { canceled: false, error: 'invalid_java_binary' };
+        }
+    } catch {
+        return { canceled: false, error: 'invalid_java_binary' };
+    }
+    return { canceled: false, path: resolved };
+})
+
 // GPU (informations de base) pour les profils de performance et le diagnostic. Jamais bloquant : délai de 3 s.
 ipcMain.handle('get-gpu-info', async () => {
     try {

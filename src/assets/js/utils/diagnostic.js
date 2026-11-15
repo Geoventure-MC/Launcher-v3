@@ -181,3 +181,257 @@ export async function collectDiagnostic(c) {
     ]);
     return redact(raw, { homes: [os.homedir(), process.env.HOME, process.env.USERPROFILE].filter(Boolean), secrets: c.secrets || [] });
 }
+
+function findFirstMatchLine(lines, regex) {
+    for (const line of lines) {
+        if (regex.test(line)) return line.trim().slice(0, 220);
+    }
+    return null;
+}
+
+/**
+ * Analyse le texte d'un crash-report ou des derniers logs pour en extraire
+ * une cause lisible en français (fonction PURE, sans accès disque).
+ * @param {string} text
+ * @param {number|string|null} [exitCode]
+ * @returns {{cause: string, title: string, summary: string, hint: string, matchedLine: string|null}}
+ */
+export function analyzeCrashText(text, exitCode = null) {
+    const raw = String(text == null ? '' : text);
+    const lines = raw.replace(/\r/g, '').split('\n');
+    const codeStr = exitCode !== null && exitCode !== undefined ? String(exitCode) : '?';
+
+    // 1. Version Java incompatible
+    const javaVerLine = findFirstMatchLine(lines, /UnsupportedClassVersionError|has been compiled by a more recent version of the Java Runtime|class file version \d+(?:\.\d+)?/i);
+    if (javaVerLine) {
+        return {
+            cause: 'java_version',
+            title: 'Version de Java incompatible',
+            summary: 'Le jeu ou un mod nécessite une autre version de Java (JDK 17 requis pour Minecraft 1.20.1 / Forge).',
+            hint: 'Sélectionnez un JDK 17 dans Paramètres → Avancé → Java / JDK ou réinitialisez sur Automatique.',
+            matchedLine: javaVerLine,
+        };
+    }
+
+    // 2. Mémoire insuffisante (OOM / tas JVM)
+    const oomLine = findFirstMatchLine(lines, /java\.lang\.OutOfMemoryError|Java heap space|GC overhead limit exceeded|Direct buffer memory|Could not reserve enough space for .* object heap|There is insufficient memory for the Java Runtime Environment/i);
+    if (oomLine || exitCode === 137) {
+        return {
+            cause: 'oom',
+            title: 'Mémoire insuffisante (OutOfMemoryError)',
+            summary: 'Minecraft a épuisé la mémoire vive allouée ou la JVM n’a pas pu réserver le tas demandé.',
+            hint: 'Ajustez la RAM allouée dans Paramètres → RAM (4 à 8 Go selon votre machine) et fermez les applications lourdes.',
+            matchedLine: oomLine || `Process terminated with signal / exit code ${codeStr} (OOM)`,
+        };
+    }
+
+    // 3. Mod manquant ou dépendance incompatible
+    const missingModLine = findFirstMatchLine(lines, /Missing or unsupported mandatory dependencies|MissingModException|Missing language provider|Mod ["']?[A-Za-z0-9_.-]+["']? requires /i);
+    if (missingModLine) {
+        const depMatch = raw.match(/Mod\s+["']?([A-Za-z0-9_.-]+)["']?\s+requires\s+([A-Za-z0-9_.-]+)(?:\s+([^\n\r]{1,40}))?/i);
+        const extraDetail = depMatch ? ` (${depMatch[1]} requiert ${depMatch[2]})` : '';
+        return {
+            cause: 'missing_mod',
+            title: 'Mod ou dépendance manquant(e)',
+            summary: `Un mod obligatoire ou une bibliothèque requise est manquant(e) ou dans une mauvaise version${extraDetail}.`,
+            hint: 'Utilisez « Réparer l’installation » dans Paramètres → Avancé ou vérifiez vos mods ajoutés manuellement.',
+            matchedLine: missingModLine,
+        };
+    }
+
+    // 4. Conflit / erreur de chargement de mod (Forge / Mixin)
+    const modErrLine = findFirstMatchLine(lines, /DuplicateModsFoundException|MixinApplyError|MixinTransformerError|ModLoadingException|Caught exception during mod loading/i);
+    if (modErrLine) {
+        const suspect = raw.match(/(?:Suspected Mods:|Mod File:|Failure message:)\s*([^\n\r]{1,120})/i);
+        const extra = suspect ? ` Détail : ${suspect[1].trim()}` : '';
+        return {
+            cause: 'mod_conflict',
+            title: 'Erreur ou conflit de mod (Forge / Mixin)',
+            summary: `Un mod a déclenché une erreur fatale lors du chargement ou en jeu.${extra}`,
+            hint: 'Désactivez vos mods optionnels/communautaires récents ou lancez « Réparer l’installation ».',
+            matchedLine: modErrLine,
+        };
+    }
+
+    // 5. Erreur graphique / pilote GPU (OpenGL / GLFW)
+    const gpuLine = findFirstMatchLine(lines, /GLFW error|Pixel format not accelerated|driver does not appear to support OpenGL|EXCEPTION_ACCESS_VIOLATION.*(?:nvoglv64|atio6axx|ig[0-9]*icd|amdocl)/i);
+    if (gpuLine) {
+        return {
+            cause: 'graphics',
+            title: 'Erreur graphique / Pilote GPU (OpenGL)',
+            summary: 'L’initialisation graphique (OpenGL / GLFW) a échoué.',
+            hint: 'Mettez à jour les pilotes de votre carte graphique et vérifiez que Java utilise le GPU dédié.',
+            matchedLine: gpuLine,
+        };
+    }
+
+    // 6. Crash natif JVM (access violation / SIGSEGV / codes natifs Windows)
+    const nativeLine = findFirstMatchLine(lines, /EXCEPTION_ACCESS_VIOLATION|SIGSEGV|A fatal error has been detected by the Java Runtime Environment/i);
+    if (nativeLine || exitCode === -1073740791 || exitCode === -1073741819) {
+        return {
+            cause: 'native_crash',
+            title: `Arrêt brutal de la JVM (code ${codeStr})`,
+            summary: 'La machine virtuelle Java s’est arrêtée sur une erreur native critique.',
+            hint: 'Vérifiez la version de Java (JDK 17), mettez à jour vos pilotes GPU et réinitialisez vos arguments JVM.',
+            matchedLine: nativeLine || `Code de sortie natif ${codeStr}`,
+        };
+    }
+
+    // 7. Fallback générique
+    const genericErrorLine = findFirstMatchLine(lines, /\b(?:FATAL|ERROR)\b|Exception:|Error:|Caused by:/);
+    return {
+        cause: 'unknown',
+        title: `Minecraft s’est arrêté avec une erreur (code ${codeStr})`,
+        summary: genericErrorLine
+            ? `Fermeture inattendue du jeu. Dernière erreur relevée : ${genericErrorLine}`
+            : `Le processus Minecraft s’est terminé de façon inattendue avec le code de sortie ${codeStr}.`,
+        hint: 'Copiez le diagnostic ci-dessous et transmettez-le au support pour obtenir de l’aide.',
+        matchedLine: genericErrorLine,
+    };
+}
+
+/**
+ * Extrait les lignes d'erreur les plus pertinentes d'un journal Minecraft.
+ * @param {string} logText
+ * @param {number} [maxLines]
+ * @returns {string}
+ */
+export function extractLogErrors(logText, maxLines = 45) {
+    const lines = String(logText == null ? '' : logText).replace(/\r/g, '').split('\n');
+    const picked = [];
+    let captureContext = 0;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/(?:FATAL|ERROR|Exception|Error:|Caused by:|Suppressed:|---- Minecraft Crash Report ----|Description:)/.test(line)) {
+            picked.push(line);
+            captureContext = 5;
+        } else if (captureContext > 0 && line.trim()) {
+            picked.push(line);
+            captureContext--;
+        }
+    }
+    const result = picked.length > 0 ? picked.slice(-maxLines) : lines.filter(Boolean).slice(-maxLines);
+    return result.join('\n');
+}
+
+/**
+ * Recherche et lit le rapport de crash le plus récent dans `<gameDir>/crash-reports`.
+ * @param {string} gameDir
+ * @param {number} [sinceMs] Timestamp de début du lancement (0 pour ignorer le filtre temporel)
+ * @returns {{filePath: string, fileName: string, content: string, mtimeMs: number}|null}
+ */
+export function findLatestCrashReport(gameDir, sinceMs = 0) {
+    if (!gameDir) return null;
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.join(gameDir, 'crash-reports');
+    try {
+        if (!fs.existsSync(dir)) return null;
+        const files = fs.readdirSync(dir)
+            .filter(name => /^crash-.*\.(txt|log)$/i.test(name))
+            .map(name => {
+                const filePath = path.join(dir, name);
+                try {
+                    const st = fs.statSync(filePath);
+                    return st.isFile() ? { filePath, fileName: name, mtimeMs: st.mtimeMs } : null;
+                } catch {
+                    return null;
+                }
+            })
+            .filter(Boolean)
+            .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        const match = sinceMs > 0
+            ? files.find(f => f.mtimeMs >= sinceMs - 5000)
+            : files[0];
+        if (!match) return null;
+
+        const raw = fs.readFileSync(match.filePath, 'utf8');
+        const headLines = raw.replace(/\r/g, '').split('\n').slice(0, 180).join('\n');
+        return { ...match, content: headLines };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Construit un rapport de crash complet et entièrement masqué (`redact()`) prêt à être
+ * affiché dans la modale d'erreur et copié dans le presse-papiers.
+ * @param {object} opts
+ * @returns {object}
+ */
+export function collectCrashReport(opts = {}) {
+    const os = require('os');
+    const path = require('path');
+    const homes = [os.homedir(), process.env.HOME, process.env.USERPROFILE].filter(Boolean);
+    const secrets = Array.isArray(opts.secrets) ? opts.secrets : [];
+    const scrub = (s) => redact(s, { homes, secrets });
+
+    const exitCode = opts.exitCode !== undefined ? opts.exitCode : null;
+    const crashFile = opts.gameDir ? findLatestCrashReport(opts.gameDir, opts.launchStartMs || 0) : null;
+    const latestLogPath = opts.gameDir ? path.join(opts.gameDir, 'logs', 'latest.log') : null;
+    const latestLogTail = latestLogPath ? readTail(latestLogPath, 160) : null;
+    const consoleTail = Array.isArray(opts.logBuffer) ? opts.logBuffer.slice(-160).join('\n') : '';
+
+    let source = 'console';
+    let sourceName = 'console';
+    let primaryText = consoleTail;
+
+    if (crashFile && crashFile.content) {
+        source = 'crash-report';
+        sourceName = crashFile.fileName;
+        primaryText = crashFile.content;
+    } else if (latestLogTail) {
+        source = 'latest.log';
+        sourceName = 'logs/latest.log';
+        primaryText = latestLogTail;
+    }
+
+    const analysisRaw = analyzeCrashText(primaryText || consoleTail, exitCode);
+    const analysis = {
+        cause: analysisRaw.cause,
+        title: scrub(analysisRaw.title),
+        summary: scrub(analysisRaw.summary),
+        hint: scrub(analysisRaw.hint),
+        matchedLine: analysisRaw.matchedLine ? scrub(analysisRaw.matchedLine) : null,
+    };
+
+    const excerptRaw = source === 'crash-report'
+        ? primaryText.split('\n').slice(0, 50).join('\n')
+        : extractLogErrors(primaryText, 40);
+    const excerpt = scrub(excerptRaw || '(aucune sortie de log disponible)');
+
+    const pkg = opts.pkg || {};
+    const cfg = opts.config || {};
+    const metaLines = [
+        `Code de sortie : ${exitCode !== null ? exitCode : 'inconnu'}`,
+        `Source analysée : ${sourceName}`,
+        `Cause détectée : ${analysis.cause} — ${analysis.title}`,
+        `Synthèse : ${analysis.summary}`,
+        `Conseil : ${analysis.hint}`,
+        `Launcher : ${pkg.productName || pkg.name || 'Launcher'} ${pkg.version || '?'}`,
+        `OS : ${os.type()} ${os.release()} (${process.platform} ${process.arch})`,
+        `Instance : ${opts.instance || '(défaut)'}`,
+        `Loader : ${cfg.loader ? `${cfg.loader.type} ${cfg.loader.build}` : '?'} / MC ${cfg.game_version || '?'}`,
+        `Java : ${opts.javaPath || 'automatique (launcher)'}`,
+        `RAM : ${opts.ram ? `${opts.ram.ramMin}-${opts.ram.ramMax} Go` : '?'}`,
+        `Arguments JVM : ${(opts.jvmArgs || []).join(' ') || '(défaut)'}`,
+    ];
+
+    const report = scrub(formatReport([
+        { title: 'Nexus - Rapport de crash automatique', body: metaLines.join('\n') },
+        { title: `Extrait (${sourceName})`, body: excerpt },
+        ...(source === 'crash-report' && latestLogTail
+            ? [{ title: 'Erreurs latest.log', body: extractLogErrors(latestLogTail, 35) }]
+            : []),
+    ]));
+
+    return {
+        exitCode,
+        source,
+        sourceName,
+        analysis,
+        excerpt,
+        report,
+    };
+}

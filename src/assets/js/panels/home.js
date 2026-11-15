@@ -9,7 +9,9 @@
 
 import { logger, database, changePanel, t } from '../utils.js';
 import { sanitizeJvmArgs, launchRamMaxGb, toGb } from '../utils/perf.js';
-import { sendEvent, isConsented } from '../utils/telemetry.js';
+import { sendEvent, sendErrorEvent, isConsented } from '../utils/telemetry.js';
+import { resolveLaunchJavaConfig } from '../utils/java.js';
+import { collectCrashReport } from '../utils/diagnostic.js';
 import { validatePanel } from '../utils/schema-validator.js';
 import { getGameDirectory, getGameDirectoryFor } from '../utils/gamedir.js';
 import { applyForgeWindowSettings } from '../utils/forgeconfig.js';
@@ -230,6 +232,10 @@ class Home {
     }
 
     handleLaunchError(err) {
+        sendErrorEvent('modpack_error', {
+            phase: 'manifest',
+            message: err && err.message ? err.message : String(err || 'launch_failed'),
+        });
         const playBtn = document.querySelector('.play-btn');
         const info = document.querySelector('.text-download');
         const progressBar = document.querySelector('.progress-bar');
@@ -322,6 +328,8 @@ class Home {
         }
 
         await this.verifyModsBeforeLaunch();
+        this._launchStartMs = Date.now();
+        this._voluntaryClose = false;
         const fml = applyForgeWindowSettings(this.gameDir());
         this.writeLauncherLog(`fml.toml ${fml.file} : earlyWindowControl=${fml.value}${fml.ok ? '' : ' (NON appliqué' + (fml.error ? ' : ' + fml.error : '') + ')'}`);
         const opts = await this.getLaunchOptions();
@@ -350,10 +358,17 @@ class Home {
         const savedRam = (await this.database.get('1234', 'ram')).value;
         const ramMax = launchRamMaxGb(savedRam.ramMax, toGb(require('os').totalmem()));
         const ram = { ramMin: Math.min(Number(savedRam.ramMin) || 1, ramMax), ramMax };
-        const javaPath = (await this.database.get('1234', 'java-path')).value;
+        const javaPath = (await this.database.get('1234', 'java-path'))?.value;
+        const resolvedJava = resolveLaunchJavaConfig(javaPath, this.config.java);
+        if (javaPath && javaPath.path && !resolvedJava.customPath) {
+            this.writeLauncherLog('java-path ignoré (exécutable invalide ou introuvable), repli sur Java par défaut');
+        } else if (resolvedJava.customPath) {
+            this.writeLauncherLog(`Java personnalisé utilisé : ${path.basename(resolvedJava.customPath)}`);
+        }
         const javaArgs = (await this.database.get('1234', 'java-args'))?.value;
         // Arguments JVM du profil de performance (ou saisis à la main) ; -Xms/-Xmx sont retirés (curseurs RAM).
         const jvmArgs = sanitizeJvmArgs(javaArgs && Array.isArray(javaArgs.args) ? javaArgs.args : []);
+        this._lastLaunchMeta = { ram, jvmArgs, javaPath: resolvedJava.customPath };
         this.writeLauncherLog(`lancement RAM ${ram.ramMin}-${ram.ramMax} Go, JVM ${jvmArgs.join(' ') || '(défaut)'}`);
         const resolution = (await this.database.get('1234', 'screen')).value;
         const launcherSettings = (await this.database.get('1234', 'launcher')).value;
@@ -385,7 +400,7 @@ class Home {
             intelEnabledMac: process.platform === 'darwin' && process.arch === 'arm64',
             JVM_ARGS: jvmArgs,
             GAME_ARGS: [],
-            java: this.config.java,
+            java: resolvedJava.java,
             // Résolution choisie dans les réglages (« <auto> » = taille par défaut du jeu).
             screen: screen ? { width: Number(screen.width) || null, height: Number(screen.height) || null, fullscreen: false } : { width: null, height: null, fullscreen: false },
             memory: {
@@ -454,6 +469,23 @@ class Home {
             const msg = err && err.error ? (typeof err.error === 'string' ? err.error : JSON.stringify(err.error)) : String(err);
             this.appendLog(msg);
             this.writeLauncherLog('ERREUR ' + msg);
+            if (this.currentPhase === 'patch' || /patch|forge|processor|installer/i.test(msg)) {
+                sendErrorEvent('forge_patch_error', {
+                    phase: this.currentPhase || 'patch',
+                    patchTask: this.patchTask || '',
+                    message: msg,
+                });
+            } else if (this.currentPhase === 'download' || this.currentPhase === 'extract' || this.currentPhase === 'check' || /hash|sha1|sha256|checksum|download|modpack|etimedout|econn|http/i.test(msg)) {
+                sendErrorEvent('modpack_error', {
+                    phase: this.currentPhase || 'download',
+                    message: msg,
+                });
+            } else {
+                sendErrorEvent('launch_error', {
+                    phase: this.currentPhase || 'unknown',
+                    message: msg,
+                });
+            }
             const logToggle = document.getElementById('log-toggle-btn');
             if (logToggle) logToggle.style.display = '';
             // Une erreur pendant l'installation/le patch ne doit pas laisser l'écran figé : on la montre
@@ -636,7 +668,72 @@ class Home {
         if (logToggle) logToggle.style.display = '';
     }
 
-    handleLaunchClose(code, info, progressBar, playBtn, launcherSettings) {
+    async _collectAccountSecrets() {
+        const secrets = [];
+        try {
+            const accs = await this.database.getAll('accounts');
+            for (const row of accs || []) {
+                const v = row && row.value;
+                if (!v) continue;
+                if (v.access_token) secrets.push(v.access_token);
+                if (v.client_token) secrets.push(v.client_token);
+                if (v.meta && v.meta.refresh_token) secrets.push(v.meta.refresh_token);
+                if (v.uuid) secrets.push(v.uuid);
+            }
+        } catch { /* ignore */ }
+        return secrets;
+    }
+
+    showCrashModal(report) {
+        const overlay = document.getElementById('crash-modal-overlay');
+        if (!overlay || !report) return;
+        const setTxt = (id, txt) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = txt || '';
+        };
+        setTxt('crash-modal-title', t('crash_modal_title') || 'Minecraft s’est arrêté de façon inattendue');
+        setTxt('crash-exit-badge', (t('crash_exit_code') || 'Code de sortie : {code}').replace('{code}', String(report.exitCode ?? '?')));
+        setTxt('crash-source-label', (t('crash_source_label') || 'Source analysée : {source}').replace('{source}', report.sourceName || 'logs'));
+        setTxt('crash-cause-title', report.analysis.title);
+        setTxt('crash-cause-summary', report.analysis.summary);
+        setTxt('crash-cause-hint', report.analysis.hint);
+        setTxt('crash-excerpt', report.excerpt);
+
+        const copyBtn = document.getElementById('crash-copy-btn');
+        const logsBtn = document.getElementById('crash-logs-btn');
+        const closeBtn = document.getElementById('crash-close-btn');
+        const copyLabel = t('crash_copy_btn') || 'Copier le diagnostic';
+        if (copyBtn) {
+            copyBtn.textContent = copyLabel;
+            copyBtn.onclick = async () => {
+                try {
+                    const { clipboard } = require('electron');
+                    clipboard.writeText(report.report);
+                } catch {
+                    try { await navigator.clipboard.writeText(report.report); } catch { /* ignore */ }
+                }
+                copyBtn.textContent = t('crash_copied') || 'Diagnostic copié !';
+                setTimeout(() => { copyBtn.textContent = copyLabel; }, 2200);
+            };
+        }
+        if (logsBtn) {
+            logsBtn.textContent = t('crash_open_logs_btn') || 'Ouvrir les logs';
+            logsBtn.onclick = () => {
+                const logsDir = path.join(this.gameDir(), 'logs');
+                if (fs.existsSync(logsDir)) shell.openPath(logsDir);
+                else shell.openPath(this.gameDir());
+            };
+        }
+        const hide = () => { overlay.style.display = 'none'; };
+        if (closeBtn) {
+            closeBtn.textContent = t('crash_close_btn') || 'Fermer';
+            closeBtn.onclick = hide;
+        }
+        overlay.onclick = (e) => { if (e.target === overlay) hide(); };
+        overlay.style.display = 'flex';
+    }
+
+    async handleLaunchClose(code, info, progressBar, playBtn, launcherSettings) {
         this._launching = false;
         this._installStateRefreshed = false;
         this._pillProgressEnd();
@@ -645,18 +742,52 @@ class Home {
                 window.updateDiscordPresence('launcher');
             }
         } catch { /* ignore */ }
-        if (launcherSettings.launcher.close === 'close-launcher') ipcRenderer.send("main-window-show");
-        progressBar.style.display = "none";
-        info.style.display = "none";
-        playBtn.style.display = "block";
-        info.innerHTML = t('verification');
+        if (launcherSettings?.launcher?.close === 'close-launcher') ipcRenderer.send("main-window-show");
+        if (progressBar) progressBar.style.display = "none";
+        if (info) {
+            info.style.display = "none";
+            info.innerHTML = t('verification');
+        }
+        if (playBtn) playBtn.style.display = "block";
         new logger('Launcher', '#7289da');
 
         const logToggle = document.getElementById('log-toggle-btn');
         if (logToggle) logToggle.style.display = '';
 
         const sessionDuration = Math.round((Date.now() - sessionStart) / 1000);
-        sendEvent('close', { sessionDuration });
+        const exitCode = typeof code === 'number' ? code : null;
+        const crashed = exitCode !== null && exitCode !== 0 && !this._voluntaryClose;
+
+        sendEvent('close', { sessionDuration, ...(exitCode !== null ? { exitCode } : {}) });
+
+        if (crashed) {
+            try {
+                const secrets = await this._collectAccountSecrets();
+                const report = collectCrashReport({
+                    gameDir: this.gameDir(),
+                    exitCode,
+                    launchStartMs: this._launchStartMs || 0,
+                    logBuffer: this.logBuffer,
+                    pkg,
+                    config: this.config,
+                    javaPath: this._lastLaunchMeta ? this._lastLaunchMeta.javaPath : null,
+                    ram: this._lastLaunchMeta ? this._lastLaunchMeta.ram : null,
+                    jvmArgs: this._lastLaunchMeta ? this._lastLaunchMeta.jvmArgs : [],
+                    instance: localStorage.getItem('geoventure_selected_instance') || null,
+                    secrets,
+                });
+                this.writeLauncherLog(`CRASH détecté (code ${exitCode}, cause=${report.analysis.cause}, source=${report.sourceName})`);
+                sendErrorEvent('minecraft_crash', {
+                    exitCode,
+                    cause: report.analysis.cause,
+                    source: report.source,
+                    sessionDuration,
+                });
+                this.showCrashModal(report);
+            } catch (err) {
+                console.error('[crash-reporter] failed:', err);
+            }
+        }
 
         // Achievements: accumulate the elapsed playtime (game start → close).
         // Defensive — never let this disturb the close handling.
