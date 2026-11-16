@@ -2192,7 +2192,14 @@ class Home {
         }
 
         row.innerHTML = '';
+        const geoventureDiscord = (this.config.discord_url && !String(this.config.discord_url).includes('VCmNXHvf77'))
+            ? this.config.discord_url
+            : 'https://discord.gg/geoventure';
         for (const item of items) {
+            const isDiscord = /discord/i.test(String(item.title || ''));
+            const targetUrl = (isDiscord && (!item.url || String(item.url).includes('VCmNXHvf77')))
+                ? geoventureDiscord
+                : item.url;
             const card = document.createElement('div');
             card.className = 'shortcut-card';
             card.innerHTML = `
@@ -2202,8 +2209,8 @@ class Home {
                     ${item.description ? `<div class="shortcut-sublabel">${escapeHtml(item.description)}</div>` : ''}
                 </div>
             `;
-            if (item.url) {
-                card.addEventListener('click', () => this.openWebPage(item.url));
+            if (targetUrl) {
+                card.addEventListener('click', () => this.openWebPage(targetUrl));
             }
             row.appendChild(card);
         }
@@ -2216,11 +2223,16 @@ class Home {
         const titleEl = document.getElementById('shortcuts-title');
         if (titleEl) titleEl.textContent = t('shortcuts_title') || 'RACCOURCIS';
 
+        const siteBase = String(this.config.azauth || 'https://geoventure.fr').replace(/\/+$/, '');
+        const discordUrl = (this.config.discord_url && !String(this.config.discord_url).includes('VCmNXHvf77'))
+            ? this.config.discord_url
+            : 'https://discord.gg/geoventure';
         const defaults = [
-            { icon: '💬', title: 'Discord', url: 'https://discord.gg/VCmNXHvf77' },
-            { icon: '🌐', title: 'Site Web', url: this.config.azauth || '' },
-            { icon: '🗳️', title: 'Vote', desc: 'Voter pour le serveur' },
-            { icon: '🛒', title: 'Boutique', desc: 'Boutique en ligne' },
+            { icon: '💬', title: 'Discord', desc: 'Rejoindre la communauté', url: discordUrl },
+            { icon: '🌐', title: 'Site Web', desc: 'Actualités & classements', url: siteBase },
+            { icon: '🗳️', title: 'Vote', desc: 'Soutenir le serveur', url: `${siteBase}/vote` },
+            { icon: '🛒', title: 'Boutique', desc: 'Grades & objets', url: `${siteBase}/shop` },
+            { icon: '🗺️', title: 'Carte 3D', desc: 'BlueMap en direct', url: 'https://map.geoventure.fr' },
         ];
 
         row.innerHTML = '';

@@ -2150,3 +2150,95 @@ body::-webkit-scrollbar {
     opacity: 0.45;
     cursor: not-allowed;
 }
+
+/* ── Finition visuelle Launcher Pro (v3.1) ─────────────────────────────────────────── */
+.sidebar {
+    background: linear-gradient(180deg, rgba(12, 14, 19, 0.88) 0%, rgba(9, 10, 14, 0.94) 100%);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 6px 0 32px rgba(0, 0, 0, 0.35);
+}
+
+.main-content {
+    padding: 20px 26px 26px 26px;
+    gap: 18px;
+}
+
+.main-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.main-content::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+}
+
+.main-content::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-color);
+}
+
+.news-hero-card {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.25s ease, box-shadow 0.28s ease;
+}
+
+.news-hero-card:hover {
+    border-color: var(--border-accent);
+    box-shadow: 0 22px 48px rgba(0, 0, 0, 0.56), 0 0 0 1px var(--accent-color-subtle);
+}
+
+.news-hero-overlay {
+    background: linear-gradient(95deg, rgba(8, 10, 14, 0.92) 0%, rgba(8, 10, 14, 0.68) 52%, rgba(8, 10, 14, 0.2) 100%);
+}
+
+.news-hero-badge {
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(0, 189, 122, 0.25);
+}
+
+.shortcuts-row {
+    gap: 10px;
+}
+
+.shortcut-card {
+    background: linear-gradient(145deg, rgba(28, 30, 38, 0.9) 0%, rgba(18, 20, 26, 0.92) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.shortcut-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-accent);
+    background: linear-gradient(145deg, rgba(34, 38, 48, 0.96) 0%, rgba(20, 26, 32, 0.96) 100%);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.38), 0 0 16px var(--accent-color-subtle);
+}
+
+.shortcut-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.info-item,
+.discover-card {
+    background: linear-gradient(160deg, rgba(24, 26, 34, 0.92) 0%, rgba(15, 17, 23, 0.94) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.32);
+}
+
+.play-btn {
+    box-shadow: 0 8px 26px var(--accent-color-glow), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.22s ease;
+}
+
+.play-btn:hover:not(:disabled) {
+    transform: scale(1.06);
+    box-shadow: 0 12px 32px var(--accent-color-glow), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
