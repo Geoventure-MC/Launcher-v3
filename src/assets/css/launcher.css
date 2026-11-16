@@ -16,8 +16,8 @@ body {
     margin: 0;
     padding: 0;
     user-select: none;
-    background: linear-gradient(#00000066, #00000066),
-        url("../images/background/light.jpg") black no-repeat center center;
+    background: linear-gradient(135deg, rgba(8, 10, 14, 0.68), rgba(8, 12, 16, 0.52)),
+        url("../images/background/light.jpg") #0c0c10 no-repeat center center;
     background-size: cover;
     overflow: hidden;
 }
