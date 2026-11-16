@@ -1360,3 +1360,66 @@ input:checked+.slider:before {
 @keyframes community-spin {
     to { transform: rotate(360deg); }
 }
+
+/* RAM & JVM Presets */
+.ram-presets-block {
+    margin-top: 18px;
+    width: 100%;
+    max-width: 560px;
+}
+
+.ram-presets-title {
+    font: 600 13px/1.3 'Poppins', sans-serif;
+    color: rgba(255, 255, 255, 0.85);
+    margin-bottom: 10px;
+}
+
+.ram-presets-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.ram-preset-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.2s ease, background 0.2s ease, transform 0.15s ease;
+}
+
+.ram-preset-btn:hover:not(:disabled) {
+    border-color: var(--accent-color, var(--geo-accent));
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateY(-1px);
+}
+
+.ram-preset-btn.recommended {
+    border-color: rgba(74, 222, 128, 0.45);
+}
+
+.ram-preset-btn.active {
+    border-color: var(--accent-color, var(--geo-accent));
+    background: rgba(74, 222, 128, 0.14);
+}
+
+.ram-preset-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ram-preset-name {
+    font: 600 13px/1.2 'Poppins', sans-serif;
+}
+
+.ram-preset-meta {
+    font: 400 11px/1.3 'Poppins', sans-serif;
+    color: rgba(255, 255, 255, 0.65);
+}

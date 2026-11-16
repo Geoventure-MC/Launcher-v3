@@ -4,6 +4,7 @@ import { test, expect } from '@playwright/test';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { startMock } from './mock-panel.mjs';
 import { launchLauncher, panelActive, installGame, gameDirFor, shot, ROOT } from './helpers.mjs';
 
@@ -226,6 +227,7 @@ test('règles pures : noms de fichiers de mods et adresse d\'authentification', 
   const guard = g.default || g;
   expect(guard.isSafeExternalUrl('https://geoventure.fr/x')).toBe(true);
   for (const bad of ['file:///C:/x.exe', '\\\\hote\\partage\\x.exe', 'ms-settings:', 'javascript:alert(1)', 'smb://h/x']) expect(guard.isSafeExternalUrl(bad), bad).toBe(false);
-  expect(guard.isAppPage('file:///app/src/launcher.html', '/app')).toBe(true);
-  expect(guard.isAppPage('file:///etc/x.html', '/app')).toBe(false);
+  const appRoot = path.resolve('/app');
+  expect(guard.isAppPage(pathToFileURL(path.join(appRoot, 'src', 'launcher.html')).href, appRoot)).toBe(true);
+  expect(guard.isAppPage(pathToFileURL(path.join(path.resolve('/etc'), 'x.html')).href, appRoot)).toBe(false);
 });

@@ -50,6 +50,7 @@ export function modTargetName(file, enabled) {
 // require() paresseux : les règles pures ci-dessus restent chargeables hors Electron (tests Node).
 const fs = { get m() { return require('fs'); } };
 const path = { get m() { return require('path'); } };
+const crypto = { get m() { return require('crypto'); } };
 function communityFile(gameDir) {
     return path.m.join(gameDir, 'launcher_config', 'community_mods.json');
 }
@@ -81,4 +82,123 @@ export function communityModPaths(gameDir) {
     return readCommunityMods(gameDir)
         .filter(n => { try { return fs.m.existsSync(path.m.join(gameDir, 'mods', n)); } catch { return false; } })
         .map(n => `mods/${n}`);
+}
+
+/** Calcule le SHA-1 hexadécimal d'un fichier local. */
+export function sha1File(filePath) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.m.createHash('sha1');
+        const stream = fs.m.createReadStream(filePath);
+        stream.on('data', chunk => hash.update(chunk));
+        stream.on('end', () => resolve(hash.digest('hex')));
+        stream.on('error', reject);
+    });
+}
+
+function isSafeHttpUrl(rawUrl) {
+    try {
+        const u = new URL(String(rawUrl));
+        return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Compare le manifeste modpack aux fichiers locaux (taille + SHA-1).
+ * Retourne { valid, missing, corrupted, total } sans modifier le disque.
+ */
+export async function diffVerifyManifest(manifest, gameDir, { isIgnoredPath, onProgress } = {}) {
+    const entries = Array.isArray(manifest) ? manifest : [];
+    const baseDir = path.m.resolve(gameDir);
+    const valid = [];
+    const missing = [];
+    const corrupted = [];
+    const checkable = entries.filter(e => e && typeof e.path === 'string' && e.path && !(typeof isIgnoredPath === 'function' && isIgnoredPath(e.path)));
+
+    for (let i = 0; i < checkable.length; i++) {
+        const entry = checkable[i];
+        const target = path.m.resolve(baseDir, entry.path);
+        if (target !== baseDir && !target.startsWith(baseDir + path.m.sep)) continue;
+
+        let stat = null;
+        try {
+            stat = fs.m.statSync(target);
+        } catch {
+            missing.push(entry);
+            if (onProgress) onProgress({ phase: 'scan', done: i + 1, total: checkable.length, entry });
+            continue;
+        }
+        if (!stat.isFile()) {
+            missing.push(entry);
+            if (onProgress) onProgress({ phase: 'scan', done: i + 1, total: checkable.length, entry });
+            continue;
+        }
+
+        let bad = false;
+        if (entry.size != null && stat.size !== Number(entry.size)) {
+            bad = true;
+        } else if (entry.hash) {
+            const localHash = await sha1File(target);
+            bad = localHash.toLowerCase() !== String(entry.hash).toLowerCase();
+        }
+        if (bad) corrupted.push(entry);
+        else valid.push(entry);
+
+        if (onProgress) onProgress({ phase: 'scan', done: i + 1, total: checkable.length, entry });
+    }
+
+    return { valid, missing, corrupted, total: checkable.length };
+}
+
+/**
+ * Réparation différentielle SHA-1 en 1 clic :
+ * ne retélécharge que les fichiers manquants ou corrompus du manifeste.
+ */
+export async function repairDifferential(manifest, gameDir, { isIgnoredPath, fetchFn = fetch, onProgress } = {}) {
+    const scan = await diffVerifyManifest(manifest, gameDir, { isIgnoredPath, onProgress });
+    const toRepair = [...scan.missing, ...scan.corrupted];
+    const baseDir = path.m.resolve(gameDir);
+    let repairedCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    for (let i = 0; i < toRepair.length; i++) {
+        const entry = toRepair[i];
+        const target = path.m.resolve(baseDir, entry.path);
+        if (target !== baseDir && !target.startsWith(baseDir + path.m.sep)) continue;
+
+        try {
+            if (!entry.url || !isSafeHttpUrl(entry.url)) {
+                throw new Error(`Invalid URL for ${entry.path}`);
+            }
+            const res = await fetchFn(entry.url);
+            if (!res.ok) throw new Error(`HTTP ${res.status} for ${entry.path}`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (entry.hash) {
+                const got = crypto.m.createHash('sha1').update(buf).digest('hex');
+                if (got.toLowerCase() !== String(entry.hash).toLowerCase()) {
+                    throw new Error(`SHA-1 mismatch after download for ${entry.path}`);
+                }
+            }
+            fs.m.mkdirSync(path.m.dirname(target), { recursive: true });
+            fs.m.writeFileSync(target, buf);
+            repairedCount++;
+        } catch (err) {
+            failedCount++;
+            errors.push({ path: entry.path, error: err && err.message ? err.message : String(err) });
+        }
+
+        if (onProgress) onProgress({ phase: 'download', done: i + 1, total: toRepair.length, entry });
+    }
+
+    return {
+        total: scan.total,
+        validCount: scan.valid.length,
+        missingCount: scan.missing.length,
+        corruptedCount: scan.corrupted.length,
+        repairedCount,
+        failedCount,
+        errors,
+    };
 }

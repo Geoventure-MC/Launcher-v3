@@ -390,4 +390,55 @@ test.describe('profil', () => {
   });
 });
 
+test.describe('Nexus Next-Gen', () => {
+  test('tableau de bord serveur en direct : latence, joueurs et bouton Rejoindre (--server)', async () => {
+    mock.setMode('ok');
+    const L = await launchLauncher(mock);
+    try {
+      await panelActive(L.win, 'home');
+      await expect(L.win.locator('#server-latency-badge')).toContainText('42 ms');
+      await expect(L.win.locator('#server-players-max')).toContainText('7/100');
+      await expect(L.win.locator('#server-join-btn')).toBeVisible();
+
+      const args = await L.win.evaluate(async () => {
+        const home = window.panels?.home || null;
+        // Vérifie que getLaunchOptions({ joinServer: true }) injecte --server et --port.
+        const mod = await import('./assets/js/panels/home.js');
+        const h = new mod.default();
+        h.database = await (await import('./assets/js/utils.js')).database.prototype.constructor.prototype ? await new (await import('./assets/js/utils.js')).database().init() : null;
+        h.config = await (await import('./assets/js/utils.js')).config.GetConfig();
+        h._directServerTarget = { ip: '127.0.0.1', port: 25999 };
+        h.writeLauncherLog = () => {};
+        const opts = await h.getLaunchOptions({ joinServer: true });
+        return opts.GAME_ARGS;
+      });
+      expect(args).toEqual(['--server', '127.0.0.1', '--port', '25999']);
+    } finally { await L.close(); }
+  });
+
+  test('réparation différentielle SHA-1 : ne retélécharge que les fichiers manquants ou corrompus', async () => {
+    mock.setMode('ok');
+    const L = await launchLauncher(mock, { prepare: (home) => installGame(home, 'geoventure') });
+    try {
+      await panelActive(L.win, 'home');
+      const dir = gameDirFor(L.home, 'geoventure');
+      // 1 fichier corrompu + 1 fichier valide conservé.
+      fs.writeFileSync(dir + '/mods/geocore.jar', 'CORROMPU!!');
+      const validBefore = fs.readFileSync(dir + '/config/geo.toml', 'utf8');
+      mock.clearHits();
+
+      await openSettings(L.win, 'advanced');
+      await L.win.locator('#diff-repair-btn').click();
+      await expect(L.win.locator('#diff-repair-status')).toHaveClass(/repair-status-ok/, { timeout: 15000 });
+      await expect(L.win.locator('#diff-repair-status')).toContainText('1');
+
+      // Seul geocore.jar a été retéléchargé depuis /storage/data/, geo.toml n'a pas été retéléchargé.
+      const dlHits = mock.hits.filter(h => h.path.startsWith('/storage/data/'));
+      expect([...new Set(dlHits.map(h => h.path))]).toEqual(['/storage/data/mods/geocore.jar']);
+      expect(fs.readFileSync(dir + '/mods/geocore.jar', 'utf8')).not.toBe('CORROMPU!!');
+      expect(fs.readFileSync(dir + '/config/geo.toml', 'utf8')).toBe(validBefore);
+    } finally { await L.close(); }
+  });
+});
+
 function require_tmp(dir, name, buf) { const p = dir + '/' + name; fs.writeFileSync(p, buf); return p; }

@@ -43,6 +43,24 @@
                         <span id="total-ram"></span><br>
                         <span id="free-ram"></span>
                     </div>
+                    <div class="ram-presets-block" id="ram-presets-block">
+                        <div class="ram-presets-title" id="ram-presets-title">Profils RAM &amp; JVM (G1GC optimisé)</div>
+                        <div class="ram-presets-grid" id="ram-presets-grid">
+                            <button type="button" class="ram-preset-btn" data-preset="eco" id="ram-preset-eco">
+                                <span class="ram-preset-name" id="ram-preset-eco-name">Léger</span>
+                                <span class="ram-preset-meta" id="ram-preset-eco-meta"></span>
+                            </button>
+                            <button type="button" class="ram-preset-btn" data-preset="balanced" id="ram-preset-balanced">
+                                <span class="ram-preset-name" id="ram-preset-balanced-name">Équilibré</span>
+                                <span class="ram-preset-meta" id="ram-preset-balanced-meta"></span>
+                            </button>
+                            <button type="button" class="ram-preset-btn" data-preset="performance" id="ram-preset-performance">
+                                <span class="ram-preset-name" id="ram-preset-performance-name">Ultra</span>
+                                <span class="ram-preset-meta" id="ram-preset-performance-meta"></span>
+                            </button>
+                        </div>
+                        <div class="repair-status" id="ram-preset-status" style="display: none;"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -233,11 +251,18 @@
                 <div class="advanced-section">
                     <h3 id="repair-title">🔧 Réparer l'installation</h3>
                     <div class="repair-info" id="repair-info"></div>
-                    <button class="btn-advanced" id="repair-btn">
-                        <i class="fas fa-wrench"></i>
-                        <span id="repair-btn-text">Réparer</span>
-                    </button>
+                    <div class="diag-actions">
+                        <button class="btn-advanced" id="repair-btn">
+                            <i class="fas fa-wrench"></i>
+                            <span id="repair-btn-text">Réparer</span>
+                        </button>
+                        <button class="btn-advanced" id="diff-repair-btn" type="button">
+                            <i class="fas fa-shield-alt"></i>
+                            <span id="diff-repair-btn-text">Vérification &amp; réparation SHA-1</span>
+                        </button>
+                    </div>
                     <div class="repair-status" id="repair-status" style="display: none;"></div>
+                    <div class="repair-status" id="diff-repair-status" style="display: none;"></div>
                 </div>
             </div>
         </div>

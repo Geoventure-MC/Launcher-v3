@@ -86,7 +86,7 @@
             </section>
 
             <aside class="info-section">
-                <div class="info-item">
+                <div class="info-item server-dashboard" id="server-dashboard">
                     <div class="server">
                         <img class="server-img" />
                         <div class="server-text">
@@ -98,6 +98,14 @@
                             <div class="online off"></div>
                         </div>
                     </div>
+                    <div class="server-live-meta" id="server-live-meta">
+                        <span class="server-latency-badge latency-off" id="server-latency-badge">-- ms</span>
+                        <span class="server-players-max" id="server-players-max"></span>
+                        <button type="button" class="server-refresh-btn" id="server-refresh-btn" title="Actualiser le statut" aria-label="Actualiser le statut">&#x21bb;</button>
+                    </div>
+                    <button type="button" class="server-join-btn" id="server-join-btn">
+                        <span id="server-join-text">Rejoindre le serveur</span>
+                    </button>
                 </div>
                 <div class="info-item game-events-card" id="game-events-card" style="display:none;" aria-live="polite"></div>
                 <div class="info-item affluence-widget" id="affluence-widget" style="display:none;">

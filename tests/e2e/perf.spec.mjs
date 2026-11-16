@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
+import os from 'node:os';
 import { startMock } from './mock-panel.mjs';
 import { launchLauncher, shot, panelActive, gameDirFor, writeFile } from './helpers.mjs';
 import path from 'node:path';
@@ -146,6 +147,37 @@ test.describe('profils : interface (RAM simulée)', () => {
       await expect(L.win.locator('#perf-warnings')).toContainText(/60 ?%/);
     } finally { await L.close(); }
   });
+
+  test('onglet RAM : presets Léger / Équilibré / Ultra avec détection auto et flags G1GC', async () => {
+    mock.setMode('ok');
+    const L = await launchLauncher(mock, { env: { NEXUS_SIM_RAM_GB: '16', NEXUS_SIM_CORES: '8' } });
+    try {
+      await panelActive(L.win, 'home');
+      await L.win.locator('#settings-btn').click();
+      await panelActive(L.win, 'settings');
+      await L.win.locator('#ram-tab').click();
+
+      await expect(L.win.locator('#ram-preset-eco')).toContainText('Léger');
+      await expect(L.win.locator('#ram-preset-balanced')).toContainText('Équilibré');
+      await expect(L.win.locator('#ram-preset-performance')).toContainText('Ultra');
+      await expect(L.win.locator('#ram-preset-performance')).toHaveClass(/recommended/);
+
+      await L.win.locator('#ram-preset-balanced').click();
+      await expect(L.win.locator('#ram-preset-status')).toHaveClass(/repair-status-ok/);
+      await expect(L.win.locator('#ram-preset-balanced')).toHaveClass(/active/);
+
+      const db = await L.win.evaluate(() => new Promise((res) => {
+        const r = indexedDB.open('database');
+        r.onsuccess = () => {
+          const d = r.result;
+          const get = (s) => new Promise(ok => { const q = d.transaction(s).objectStore(s).getAll(); q.onsuccess = () => ok(q.result[0]?.value); });
+          Promise.all([get('ram'), get('java-args')]).then(([ram, args]) => res({ ram, args }));
+        };
+      }));
+      expect(db.ram).toMatchObject({ ramMin: '3', ramMax: '6' });
+      expect(db.args.args).toContain('-XX:+UseG1GC');
+    } finally { await L.close(); }
+  });
 });
 
 test.describe('diagnostic', () => {
@@ -173,8 +205,8 @@ test.describe('diagnostic', () => {
       await shot(L.win, 'settings-diagnostic');
       for (const h of ['Système', 'Matériel', 'Java', 'Configuration', 'Réseau', 'launcher.log', 'latest.log']) expect(report).toContain(h);
       expect(report).toMatch(/Launcher: Nexus \d+\.\d+\.\d+/);
-      expect(report).toMatch(/OS: Linux/);
-      expect(report).toMatch(/Session: /);
+      expect(report).toMatch(new RegExp(`OS: ${os.type()}`));
+      if (process.platform === 'linux') expect(report).toMatch(/Session: /);
       expect(report).toMatch(/Panel: INJOIGNABLE/);
       expect(report).toContain('Instance active: geoventure');
       // 300 dernières lignes seulement.

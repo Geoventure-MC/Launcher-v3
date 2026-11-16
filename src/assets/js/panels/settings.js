@@ -18,7 +18,7 @@ import { collectDiagnostic } from '../utils/diagnostic.js';
 import { isValidJavaBinary, probeJavaVersion, detectInstalledJdks, formatJavaLabel } from '../utils/java.js';
 import { isUserPath } from '../utils/userdata.js';
 import { openExternal } from '../utils/external.js';
-import { safeModFileName, findModFile, modTargetName, recordCommunityMod } from '../utils/mods.js';
+import { safeModFileName, findModFile, modTargetName, recordCommunityMod, repairDifferential } from '../utils/mods.js';
 
 // URL http(s) valide ou null (icônes et liens venus du panel).
 function safeIcon(u) {
@@ -390,6 +390,96 @@ class Settings {
             this.database.update({ uuid: "1234", ramMin: `${min}`, ramMax: `${max}` }, 'ram');
             this.markProfileModified();
         });
+
+        this.initRamPresets(totalMem, minSpan, maxSpan);
+    }
+
+    initRamPresets(totalMem, minSpan, maxSpan) {
+        const titleEl = document.getElementById('ram-presets-title');
+        if (titleEl) titleEl.textContent = t('ram_presets_title') || 'Profils RAM & JVM (G1GC optimisé)';
+        const grid = document.getElementById('ram-presets-grid');
+        if (!grid) return;
+
+        const cores = this.hw ? this.hw.cores : ((os.cpus() && os.cpus().length) || 4);
+        const recommended = recommendProfile(totalMem, cores);
+        const status = document.getElementById('ram-preset-status');
+
+        let savedId = null;
+        try {
+            const raw = localStorage.getItem(Settings.PERF_KEY);
+            if (raw) savedId = JSON.parse(raw)?.id || null;
+        } catch { /* */ }
+
+        const syncActive = (activeId) => {
+            for (const b of grid.querySelectorAll('.ram-preset-btn')) {
+                b.classList.toggle('active', b.dataset.preset === activeId);
+            }
+        };
+
+        for (const id of PROFILE_IDS) {
+            const btn = document.getElementById(`ram-preset-${id}`);
+            const nameEl = document.getElementById(`ram-preset-${id}-name`);
+            const metaEl = document.getElementById(`ram-preset-${id}-meta`);
+            if (!btn) continue;
+
+            const plan = buildProfile(id, { totalGb: totalMem, cores });
+            const label = t(`ram_preset_${id}`) || this._profileName(id);
+            if (nameEl) nameEl.textContent = label + (id === recommended ? ` (${t('perf_recommended') || 'recommandé'})` : '');
+            if (metaEl) {
+                if (plan.insufficient) {
+                    metaEl.textContent = t('perf_details_insufficient') || 'RAM insuffisante';
+                } else {
+                    const gc = plan.jvmArgs.includes('-XX:+UseZGC') ? 'ZGC' : 'G1GC';
+                    metaEl.textContent = `${plan.ramMin}–${plan.ramMax} Go · ${gc}`;
+                }
+            }
+            btn.classList.toggle('recommended', id === recommended);
+            btn.disabled = plan.insufficient;
+
+            btn.addEventListener('click', async () => {
+                if (plan.insufficient) return;
+                await this.database.update({ uuid: '1234', ramMin: `${plan.ramMin}`, ramMax: `${plan.ramMax}` }, 'ram');
+                await this.database.update({ uuid: '1234', args: plan.jvmArgs }, 'java-args');
+                try {
+                    localStorage.setItem(Settings.PERF_KEY, JSON.stringify({
+                        id: plan.id,
+                        ramMin: plan.ramMin,
+                        ramMax: plan.ramMax,
+                        appliedAt: Date.now(),
+                        modified: false,
+                    }));
+                } catch { /* */ }
+
+                if (this.ramSlider) {
+                    this.ramSlider.setMinValue(plan.ramMin);
+                    this.ramSlider.setMaxValue(plan.ramMax);
+                }
+                if (minSpan) minSpan.setAttribute('value', `${plan.ramMin} Go`);
+                if (maxSpan) maxSpan.setAttribute('value', `${plan.ramMax} Go`);
+
+                const jvmInput = document.getElementById('jvm-args-input');
+                if (jvmInput) jvmInput.value = plan.jvmArgs.join(' ');
+                const perfSelect = document.getElementById('perf-profile-select');
+                if (perfSelect) {
+                    perfSelect.value = plan.id;
+                    this.renderProfileDetails();
+                }
+                this.renderCurrentProfile();
+                syncActive(plan.id);
+
+                if (status) {
+                    status.style.display = 'flex';
+                    status.className = 'repair-status repair-status-ok';
+                    const msg = (t('ram_preset_applied') || 'Profil {profile} appliqué : {min}–{max} Go + flags G1GC optimisés.')
+                        .replace('{profile}', label)
+                        .replace('{min}', plan.ramMin)
+                        .replace('{max}', plan.ramMax);
+                    status.innerHTML = `<i class="fas fa-check-circle"></i><span>${this._escapeHtml(msg)}</span>`;
+                }
+            });
+        }
+
+        if (savedId) syncActive(savedId);
     }
 
     async updateModsConfig() {
@@ -1267,6 +1357,76 @@ class Settings {
             } catch { say('error', t('diag_send_error')); }
             btn.disabled = false;
         });
+
+        const diffBtn = document.getElementById('diff-repair-btn');
+        const diffBtnText = document.getElementById('diff-repair-btn-text');
+        if (diffBtnText) diffBtnText.textContent = t('diff_repair_btn') || 'Vérification & réparation SHA-1';
+        if (diffBtn) {
+            diffBtn.addEventListener('click', async () => {
+                const status = document.getElementById('diff-repair-status');
+                diffBtn.disabled = true;
+                const setStatus = (kind, msg, spinner = false) => {
+                    if (!status) return;
+                    status.style.display = 'flex';
+                    status.className = `repair-status${kind ? ` repair-status-${kind}` : ''}`;
+                    const icon = spinner
+                        ? '<span class="community-spinner"></span>'
+                        : `<i class="fas ${kind === 'ok' ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i>`;
+                    status.innerHTML = `${icon}<span>${this._escapeHtml(msg)}</span>`;
+                };
+
+                setStatus('', (t('diff_repair_scanning') || 'Vérification SHA-1 ({done}/{total})…').replace('{done}', '0').replace('{total}', '?'), true);
+                try {
+                    const report = await this.repairDifferentialInstallation((prog) => {
+                        if (prog.phase === 'scan') {
+                            const msg = (t('diff_repair_scanning') || 'Vérification SHA-1 ({done}/{total})…')
+                                .replace('{done}', prog.done)
+                                .replace('{total}', prog.total);
+                            setStatus('', msg, true);
+                        } else if (prog.phase === 'download') {
+                            const msg = (t('diff_repair_downloading') || 'Téléchargement ({done}/{total})…')
+                                .replace('{done}', prog.done)
+                                .replace('{total}', prog.total);
+                            setStatus('', msg, true);
+                        }
+                    });
+                    if (report.failedCount > 0) {
+                        const msg = (t('diff_repair_partial') || '{repaired} fichier(s) réparé(s), {failed} échec(s).')
+                            .replace('{repaired}', report.repairedCount)
+                            .replace('{failed}', report.failedCount);
+                        setStatus('error', msg);
+                    } else if (report.repairedCount > 0) {
+                        const msg = (t('diff_repair_done') || 'Réparation terminée : {repaired} fichier(s) retéléchargé(s), {valid} valide(s).')
+                            .replace('{repaired}', report.repairedCount)
+                            .replace('{valid}', report.validCount);
+                        setStatus('ok', msg);
+                    } else {
+                        const msg = (t('diff_repair_clean') || 'Modpack intact : {valid}/{total} fichiers vérifiés (SHA-1).')
+                            .replace('{valid}', report.validCount)
+                            .replace('{total}', report.total);
+                        setStatus('ok', msg);
+                    }
+                } catch (err) {
+                    console.error('Differential repair failed:', err);
+                    setStatus('error', t('repair_error'));
+                }
+                diffBtn.disabled = false;
+            });
+        }
+    }
+
+    async repairDifferentialInstallation(onProgress) {
+        const baseUrl = settings_url.endsWith('/') ? settings_url : `${settings_url}/`;
+        const manifestUrl = withInstance(pkg.env === 'azuriom' ? `${baseUrl}api/centralcorp/files` : `${baseUrl}data`);
+        const response = await fetch(manifestUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const manifest = await response.json();
+        if (!Array.isArray(manifest)) throw new Error('Invalid manifest');
+
+        return repairDifferential(manifest, this.gameDir(), {
+            isIgnoredPath: isUserPath,
+            onProgress,
+        });
     }
 
     // ----- Réparation 1 clic -----
@@ -1315,6 +1475,76 @@ class Settings {
             }
 
             btn.disabled = false;
+        });
+
+        const diffBtn = document.getElementById('diff-repair-btn');
+        const diffBtnText = document.getElementById('diff-repair-btn-text');
+        if (diffBtnText) diffBtnText.textContent = t('diff_repair_btn') || 'Vérification & réparation SHA-1';
+        if (diffBtn) {
+            diffBtn.addEventListener('click', async () => {
+                const status = document.getElementById('diff-repair-status');
+                diffBtn.disabled = true;
+                const setStatus = (kind, msg, spinner = false) => {
+                    if (!status) return;
+                    status.style.display = 'flex';
+                    status.className = `repair-status${kind ? ` repair-status-${kind}` : ''}`;
+                    const icon = spinner
+                        ? '<span class="community-spinner"></span>'
+                        : `<i class="fas ${kind === 'ok' ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i>`;
+                    status.innerHTML = `${icon}<span>${this._escapeHtml(msg)}</span>`;
+                };
+
+                setStatus('', (t('diff_repair_scanning') || 'Vérification SHA-1 ({done}/{total})…').replace('{done}', '0').replace('{total}', '?'), true);
+                try {
+                    const report = await this.repairDifferentialInstallation((prog) => {
+                        if (prog.phase === 'scan') {
+                            const msg = (t('diff_repair_scanning') || 'Vérification SHA-1 ({done}/{total})…')
+                                .replace('{done}', prog.done)
+                                .replace('{total}', prog.total);
+                            setStatus('', msg, true);
+                        } else if (prog.phase === 'download') {
+                            const msg = (t('diff_repair_downloading') || 'Téléchargement ({done}/{total})…')
+                                .replace('{done}', prog.done)
+                                .replace('{total}', prog.total);
+                            setStatus('', msg, true);
+                        }
+                    });
+                    if (report.failedCount > 0) {
+                        const msg = (t('diff_repair_partial') || '{repaired} fichier(s) réparé(s), {failed} échec(s).')
+                            .replace('{repaired}', report.repairedCount)
+                            .replace('{failed}', report.failedCount);
+                        setStatus('error', msg);
+                    } else if (report.repairedCount > 0) {
+                        const msg = (t('diff_repair_done') || 'Réparation terminée : {repaired} fichier(s) retéléchargé(s), {valid} valide(s).')
+                            .replace('{repaired}', report.repairedCount)
+                            .replace('{valid}', report.validCount);
+                        setStatus('ok', msg);
+                    } else {
+                        const msg = (t('diff_repair_clean') || 'Modpack intact : {valid}/{total} fichiers vérifiés (SHA-1).')
+                            .replace('{valid}', report.validCount)
+                            .replace('{total}', report.total);
+                        setStatus('ok', msg);
+                    }
+                } catch (err) {
+                    console.error('Differential repair failed:', err);
+                    setStatus('error', t('repair_error'));
+                }
+                diffBtn.disabled = false;
+            });
+        }
+    }
+
+    async repairDifferentialInstallation(onProgress) {
+        const baseUrl = settings_url.endsWith('/') ? settings_url : `${settings_url}/`;
+        const manifestUrl = withInstance(pkg.env === 'azuriom' ? `${baseUrl}api/centralcorp/files` : `${baseUrl}data`);
+        const response = await fetch(manifestUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const manifest = await response.json();
+        if (!Array.isArray(manifest)) throw new Error('Invalid manifest');
+
+        return repairDifferential(manifest, this.gameDir(), {
+            isIgnoredPath: isUserPath,
+            onProgress,
         });
     }
 

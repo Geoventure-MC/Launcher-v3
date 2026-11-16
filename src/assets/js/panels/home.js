@@ -8,7 +8,7 @@
 'use strict';
 
 import { logger, database, changePanel, t } from '../utils.js';
-import { sanitizeJvmArgs, launchRamMaxGb, toGb } from '../utils/perf.js';
+import { sanitizeJvmArgs, launchRamMaxGb, toGb, buildProfile, recommendProfile } from '../utils/perf.js';
 import { sendEvent, sendErrorEvent, isConsented } from '../utils/telemetry.js';
 import { resolveLaunchJavaConfig } from '../utils/java.js';
 import { collectCrashReport } from '../utils/diagnostic.js';
@@ -113,6 +113,10 @@ class Home {
 
     setStaticTexts() {
         document.getElementById('play-btn').title = t('play');
+        const joinTextEl = document.getElementById('server-join-text');
+        if (joinTextEl) joinTextEl.textContent = t('server_join') || 'Rejoindre le serveur';
+        const refreshBtn = document.getElementById('server-refresh-btn');
+        if (refreshBtn) refreshBtn.title = t('server_refresh') || 'Actualiser le statut';
         document.getElementById('text-download').textContent = t('verification');
         document.getElementById('server-name').textContent = t('offline');
         document.getElementById('server-desc').innerHTML = `<span class="red">${t('closed')}</span>`;
@@ -215,20 +219,33 @@ class Home {
     }
 
     async initLaunch() {
-        document.querySelector('.play-btn').addEventListener('click', async () => {
+        const trigger = async (launchReq = {}) => {
             // Un seul lancement à la fois : un second clic (bouton réaffiché après une erreur de
             // téléchargement pendant que l'installation continuait) lançait deux fois dans le même dossier.
             if (this._launching) return;
             this._launching = true;
             try {
-                await this._doLaunch();
+                await this._doLaunch(launchReq);
             } catch (err) {
                 this._launching = false;
                 this._pillProgressEnd();
                 console.error('Launch failed:', err);
                 this.handleLaunchError(err);
             }
-        });
+        };
+
+        document.querySelector('.play-btn').addEventListener('click', () => trigger({}));
+        const joinBtn = document.getElementById('server-join-btn');
+        if (joinBtn) {
+            joinBtn.addEventListener('click', () => trigger({ joinServer: true }));
+        }
+        const refreshBtn = document.getElementById('server-refresh-btn');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', async () => {
+                refreshBtn.disabled = true;
+                try { await this.initStatusServer(); } finally { refreshBtn.disabled = false; }
+            });
+        }
     }
 
     handleLaunchError(err) {
@@ -256,6 +273,8 @@ class Home {
         const isMaintenance = this.config.maintenance === true;
         const playBtn = document.querySelector('.play-btn');
 
+        const joinBtn = document.getElementById('server-join-btn');
+
         if (!isMaintenance) {
             if (playBtn) {
                 playBtn.disabled = false;
@@ -263,6 +282,7 @@ class Home {
                 playBtn.style.opacity = '';
                 playBtn.style.background = '';
             }
+            if (joinBtn) joinBtn.disabled = false;
             return;
         }
 
@@ -272,6 +292,10 @@ class Home {
             playBtn.style.opacity = '0.6';
             playBtn.style.background = '#b45309';
             playBtn.title = t('maintenance_active') || 'Maintenance en cours';
+        }
+        if (joinBtn) {
+            joinBtn.disabled = true;
+            joinBtn.title = t('maintenance_active') || 'Maintenance en cours';
         }
 
         this.showMaintenanceBanner();
@@ -298,7 +322,7 @@ class Home {
         container.style.display = 'block';
     }
 
-    async _doLaunch() {
+    async _doLaunch(launchReq = {}) {
         // Defense in depth: refuse to launch while the server is in maintenance.
         if (this.config.maintenance === true) {
             const info = document.querySelector('.text-download');
@@ -332,7 +356,7 @@ class Home {
         this._voluntaryClose = false;
         const fml = applyForgeWindowSettings(this.gameDir());
         this.writeLauncherLog(`fml.toml ${fml.file} : earlyWindowControl=${fml.value}${fml.ok ? '' : ' (NON appliqué' + (fml.error ? ' : ' + fml.error : '') + ')'}`);
-        const opts = await this.getLaunchOptions();
+        const opts = await this.getLaunchOptions(launchReq);
         const playBtn = document.querySelector('.play-btn');
         const info = document.querySelector(".text-download");
         const progressBar = document.querySelector(".progress-bar");
@@ -351,12 +375,15 @@ class Home {
         await launch.Launch(opts);
     }
 
-    async getLaunchOptions() {
+    async getLaunchOptions(launchReq = {}) {
+        const os = require('os');
         const urlpkg = this.getBaseUrl();
         const uuid = (await this.database.get('1234', 'accounts-selected')).value;
         const account = (await this.database.get(uuid.selected, 'accounts')).value;
         const savedRam = (await this.database.get('1234', 'ram')).value;
-        const ramMax = launchRamMaxGb(savedRam.ramMax, toGb(require('os').totalmem()));
+        const totalGb = toGb(os.totalmem());
+        const cores = (os.cpus() && os.cpus().length) || 4;
+        const ramMax = launchRamMaxGb(savedRam.ramMax, totalGb);
         const ram = { ramMin: Math.min(Number(savedRam.ramMin) || 1, ramMax), ramMax };
         const javaPath = (await this.database.get('1234', 'java-path'))?.value;
         const resolvedJava = resolveLaunchJavaConfig(javaPath, this.config.java);
@@ -367,8 +394,25 @@ class Home {
         }
         const javaArgs = (await this.database.get('1234', 'java-args'))?.value;
         // Arguments JVM du profil de performance (ou saisis à la main) ; -Xms/-Xmx sont retirés (curseurs RAM).
-        const jvmArgs = sanitizeJvmArgs(javaArgs && Array.isArray(javaArgs.args) ? javaArgs.args : []);
-        this._lastLaunchMeta = { ram, jvmArgs, javaPath: resolvedJava.customPath };
+        // Si aucun argument personnalisé n'est encore enregistré, on applique les flags du profil recommandé.
+        const rawArgs = (javaArgs && Array.isArray(javaArgs.args))
+            ? javaArgs.args
+            : buildProfile(recommendProfile(totalGb, cores), { totalGb, cores }).jvmArgs;
+        const jvmArgs = sanitizeJvmArgs(rawArgs);
+        const gameArgs = [];
+        if (launchReq && launchReq.joinServer) {
+            const target = this._directServerTarget || this.config.status || {};
+            const host = String(target.ip || 'play.geoventure.fr').trim();
+            const port = target.port ? String(target.port).trim() : '';
+            if (host && !/[\s\x00-\x1f]/.test(host)) {
+                gameArgs.push('--server', host);
+                if (port && /^\d+$/.test(port) && port !== '25565') {
+                    gameArgs.push('--port', port);
+                }
+                this.writeLauncherLog(`Connexion directe au serveur : ${host}${port ? `:${port}` : ''}`);
+            }
+        }
+        this._lastLaunchMeta = { ram, jvmArgs, gameArgs, javaPath: resolvedJava.customPath };
         this.writeLauncherLog(`lancement RAM ${ram.ramMin}-${ram.ramMax} Go, JVM ${jvmArgs.join(' ') || '(défaut)'}`);
         const resolution = (await this.database.get('1234', 'screen')).value;
         const launcherSettings = (await this.database.get('1234', 'launcher')).value;
@@ -399,7 +443,7 @@ class Home {
             ],
             intelEnabledMac: process.platform === 'darwin' && process.arch === 'arm64',
             JVM_ARGS: jvmArgs,
-            GAME_ARGS: [],
+            GAME_ARGS: gameArgs,
             java: resolvedJava.java,
             // Résolution choisie dans les réglages (« <auto> » = taille par défaut du jeu).
             screen: screen ? { width: Number(screen.width) || null, height: Number(screen.height) || null, fullscreen: false } : { width: null, height: null, fullscreen: false },
@@ -807,6 +851,13 @@ class Home {
     }
 
     async initStatusServer() {
+        // Rafraîchissement en direct toutes les 30s (enregistré une seule fois).
+        if (!this._statusPollTimer) {
+            this._statusPollTimer = setInterval(() => {
+                this.initStatusServer().catch(() => {});
+            }, 30000);
+        }
+
         // Prefer the panel's /utils/servers-status (it already SLP-pings every
         // server server-side, incl. the default) to avoid double-pinging the
         // default server. Fall back to a direct SLP ping if it's unavailable.
@@ -821,6 +872,9 @@ class Home {
                     nameServer: def.name,
                     ms: def.latency,
                     players: def.players,
+                    maxPlayers: def.max_players,
+                    ip: def.ip,
+                    port: def.port,
                 });
                 return;
             }
@@ -829,21 +883,48 @@ class Home {
         await this.pingDefaultServerDirect();
     }
 
-    renderDefaultServerStatus({ online, nameServer, ms, players }) {
+    renderDefaultServerStatus({ online, nameServer, ms, players, maxPlayers, ip, port }) {
         const nameEl = document.querySelector('.server-text .name');
         const serverMs = document.querySelector('.server-text .desc');
         const playersConnected = document.querySelector('.etat-text .text');
         const onlineEl = document.querySelector(".etat-text .online");
+        const latencyBadge = document.getElementById('server-latency-badge');
+        const playersMaxEl = document.getElementById('server-players-max');
+
+        this._directServerTarget = {
+            ip: ip || this.config.status?.ip || 'play.geoventure.fr',
+            port: port || this.config.status?.port || 25565,
+        };
 
         if (online) {
             nameEl.textContent = nameServer || this.config.status?.nameServer || '';
             const msText = ms != null ? ` - ${ms}${t('server_ping')}` : '';
             serverMs.innerHTML = `<span class="green">${t('server_online')}</span>${msText}`;
-            onlineEl.classList.toggle("off");
+            onlineEl.classList.toggle("off", false);
             if (players != null) playersConnected.textContent = players;
+            if (latencyBadge) {
+                latencyBadge.className = 'server-latency-badge ' + (ms != null && ms < 60 ? 'latency-good' : (ms != null && ms < 150 ? 'latency-mid' : 'latency-bad'));
+                latencyBadge.textContent = ms != null ? `${ms} ${t('server_ping') || 'ms'}` : t('server_online') || 'En ligne';
+            }
+            if (playersMaxEl) {
+                if (players != null && maxPlayers != null) {
+                    playersMaxEl.textContent = (t('server_players_count') || '{online}/{max} joueurs').replace('{online}', players).replace('{max}', maxPlayers);
+                } else if (players != null) {
+                    playersMaxEl.textContent = `${players} ${t('players_online') || 'joueurs en ligne'}`;
+                } else {
+                    playersMaxEl.textContent = '';
+                }
+            }
         } else {
             nameEl.textContent = t('server_unavailable');
             serverMs.innerHTML = `<span class="red">${t('server_closed')}</span>`;
+            onlineEl.classList.toggle("off", true);
+            playersConnected.textContent = '0';
+            if (latencyBadge) {
+                latencyBadge.className = 'server-latency-badge latency-off';
+                latencyBadge.textContent = t('server_latency_offline') || 'Hors ligne';
+            }
+            if (playersMaxEl) playersMaxEl.textContent = '';
         }
     }
 
@@ -878,12 +959,15 @@ class Home {
                     nameServer: this.config.status.nameServer,
                     ms: serverPing.ms,
                     players: serverPing.playersConnect,
+                    maxPlayers: serverPing.playersMax ?? null,
+                    ip,
+                    port,
                 });
             } else {
-                this.renderDefaultServerStatus({ online: false });
+                this.renderDefaultServerStatus({ online: false, ip, port });
             }
         } catch (e) {
-            this.renderDefaultServerStatus({ online: false });
+            this.renderDefaultServerStatus({ online: false, ip, port });
         }
     }
 
