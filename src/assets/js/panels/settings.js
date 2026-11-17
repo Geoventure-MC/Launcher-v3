@@ -780,6 +780,18 @@ class Settings {
             }
         }
 
+        // Effets réduits : réglage local (pas de profil serveur), appliqué tout de suite.
+        const liteFx = document.getElementById("launcher-lite-fx");
+        const liteText = document.getElementById("lite-fx-text");
+        if (liteText && t('lite_fx_option')) liteText.textContent = t('lite_fx_option');
+        if (liteFx) {
+            liteFx.checked = localStorage.getItem('geoventure_lite_fx') === '1';
+            liteFx.addEventListener("change", () => {
+                localStorage.setItem('geoventure_lite_fx', liteFx.checked ? '1' : '0');
+                document.body.classList.toggle('lite-fx', liteFx.checked);
+            });
+        }
+
         let closeLauncher = document.getElementById("launcher-close");
         let closeAll = document.getElementById("launcher-close-all");
         let openLauncher = document.getElementById("launcher-open");
@@ -1314,8 +1326,8 @@ class Settings {
             runBtn.disabled = false;
         });
 
-        $('diag-copy-btn').addEventListener('click', () => {
-            try { require('electron').clipboard.writeText(output.value); say('ok', t('diag_copied')); }
+        $('diag-copy-btn').addEventListener('click', async () => {
+            try { await require('electron').ipcRenderer.invoke('clipboard-write', output.value); say('ok', t('diag_copied')); }
             catch { say('error', t('diag_error')); }
         });
 

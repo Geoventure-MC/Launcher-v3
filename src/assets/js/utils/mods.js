@@ -202,3 +202,32 @@ export async function repairDifferential(manifest, gameDir, { isIgnoredPath, fet
         errors,
     };
 }
+
+/**
+ * Le jeu tourne-t-il déjà sur ce dossier ? Sous Windows, Java garde ses jars ouverts sans autoriser leur
+ * renommage : on tente de renommer un jar du dossier mods puis de le remettre. Échec « fichier occupé » = un
+ * Minecraft est ouvert, la mise à jour ne pourrait ni remplacer ni supprimer ses mods. Ailleurs (Linux, macOS),
+ * les fichiers ouverts se renomment librement : la réponse est toujours non, sans conséquence.
+ */
+export function modsInUse(gameDir) {
+    let modsDir;
+    try {
+        modsDir = path.m.join(gameDir, 'mods');
+        const jar = fs.m.readdirSync(modsDir).find(f => /\.jar$/i.test(f));
+        if (!jar) return false;
+        const from = path.m.join(modsDir, jar);
+        const probe = `${from}.geocheck`;
+        try {
+            fs.m.renameSync(from, probe);
+        } catch (e) {
+            return !!e && ['EBUSY', 'EPERM', 'EACCES'].includes(e.code);
+        }
+        // Remise en place (plusieurs essais : un antivirus peut ouvrir le fichier entre les deux renommages).
+        for (let i = 0; i < 5; i++) {
+            try { fs.m.renameSync(probe, from); return false; } catch { /* nouvel essai */ }
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}

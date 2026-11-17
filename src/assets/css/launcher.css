@@ -313,3 +313,15 @@ img {
     animation: dotPulse 1.2s ease-in-out infinite;
     box-shadow: 0 0 15px var(--accent-color-glow, rgba(0, 189, 122, 0.6));
 }
+
+/* ── Effets réduits ─────────────────────────────────────────────────────────
+   « lite-fx » : choisi dans les réglages (ou « réduire les animations » du système).
+   « game-running » : posé pendant une partie, le launcher resté ouvert ne prend plus de GPU. */
+body.lite-fx *, body.lite-fx *::before, body.lite-fx *::after,
+body.game-running *, body.game-running *::before, body.game-running *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+}

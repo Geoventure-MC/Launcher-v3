@@ -23,7 +23,7 @@ import config, { isOfflineMode, offlineCacheDate, getAzAuthUrl } from '../utils/
 import * as desktopNotify from '../utils/desktopNotify.js';
 import { openExternal } from '../utils/external.js';
 import { sanitizeHtml } from '../utils/sanitize.js';
-import { findModFile, modTargetName, communityModPaths } from '../utils/mods.js';
+import { findModFile, modTargetName, communityModPaths, modsInUse } from '../utils/mods.js';
 const { Launch, Status } = require('minecraft-java-core-azbetter');
 const { ipcRenderer, shell } = require('electron');
 const path = require('path');
@@ -301,6 +301,32 @@ class Home {
         this.showMaintenanceBanner();
     }
 
+    /**
+     * Au clic sur Jouer : serveur hors ligne (souvent un redémarrage après mise à jour) ou plein. Simple
+     * information, le lancement continue (le jeu met plusieurs minutes à démarrer, le serveur sera peut-être prêt).
+     */
+    showServerStateNotice() {
+        const s = this._lastStatus;
+        const container = document.getElementById('notifications-banner');
+        if (!container) return;
+        const old = container.querySelector('[data-server-state]');
+        if (old) old.remove();
+        if (!s || Date.now() - s.at > 5 * 60 * 1000) return;
+        let msg = null;
+        if (!s.online) {
+            msg = t('server_offline_notice') || 'Le serveur est hors ligne pour le moment (redémarrage probable) : le jeu se lance quand même, la connexion sera possible dans quelques minutes.';
+        } else if (Number(s.maxPlayers) > 0 && Number(s.players) >= Number(s.maxPlayers)) {
+            msg = t('server_full_notice') || 'Le serveur est plein pour le moment : la connexion peut être refusée.';
+        }
+        if (!msg) return;
+        const el = document.createElement('div');
+        el.className = 'notification-item';
+        el.dataset.serverState = '1';
+        el.innerHTML = `<span class="notif-icon">⏳</span><span class="notif-message">${escapeHtml(msg)}</span>`;
+        container.insertBefore(el, container.firstChild);
+        container.style.display = 'block';
+    }
+
     showMaintenanceBanner() {
         const container = document.getElementById('notifications-banner');
         if (!container) return;
@@ -339,6 +365,21 @@ class Home {
                 info.innerHTML = `<span class="red">${escapeHtml(t('maintenance_blocked') || 'Lancement bloqué : maintenance en cours.')}</span>`;
             }
             this.showMaintenanceBanner();
+            this._launching = false;
+            return;
+        }
+
+        this.showServerStateNotice();
+
+        // Un Minecraft déjà ouvert sur ce dossier verrouille ses jars (Windows) : la mise à jour échouerait ou
+        // laisserait l'ancien mod. On le dit clairement au lieu de lancer une seconde copie du jeu.
+        if (modsInUse(this.gameDir())) {
+            const info = document.querySelector('.text-download');
+            if (info) {
+                info.style.display = 'block';
+                info.innerHTML = `<span class="red">${escapeHtml(t('game_already_running') || 'Minecraft est déjà ouvert : fermez le jeu, puis cliquez de nouveau sur Jouer pour recevoir la mise à jour.')}</span>`;
+            }
+            this.writeLauncherLog("lancement refusé : jars du dossier mods en cours d'utilisation (jeu déjà ouvert)");
             this._launching = false;
             return;
         }
@@ -700,6 +741,8 @@ class Home {
         if (!this._launchCounted) {
             this._launchCounted = true;
             this._playStart = Date.now();
+            // Launcher resté ouvert pendant la partie : flous et animations coupés, toute la machine pour le jeu.
+            document.body.classList.add('game-running');
             try {
                 if (typeof window.updateDiscordPresence === 'function') {
                     const slug = localStorage.getItem('geoventure_selected_instance') || 'Geoventure';
@@ -763,8 +806,7 @@ class Home {
             copyBtn.textContent = copyLabel;
             copyBtn.onclick = async () => {
                 try {
-                    const { clipboard } = require('electron');
-                    clipboard.writeText(report.report);
+                    await ipcRenderer.invoke('clipboard-write', report.report);
                 } catch {
                     try { await navigator.clipboard.writeText(report.report); } catch { /* ignore */ }
                 }
@@ -859,6 +901,7 @@ class Home {
             this._playStart = null;
             this._playInstance = null;
         }
+        document.body.classList.remove('game-running');
         this._launchCounted = false;
     }
 
@@ -896,6 +939,8 @@ class Home {
     }
 
     renderDefaultServerStatus({ online, nameServer, ms, players, maxPlayers, ip, port }) {
+        // Gardé pour l'avertissement au clic sur Jouer (serveur hors ligne ou plein).
+        this._lastStatus = { online: !!online, players, maxPlayers, at: Date.now() };
         const nameEl = document.querySelector('.server-text .name');
         const serverMs = document.querySelector('.server-text .desc');
         const playersConnected = document.querySelector('.etat-text .text');
@@ -1839,8 +1884,7 @@ class Home {
         if (copyBtn) {
             copyBtn.addEventListener('click', async () => {
                 try {
-                    const { clipboard } = require('electron');
-                    clipboard.writeText(this.logBuffer.join('\n'));
+                    await ipcRenderer.invoke('clipboard-write', this.logBuffer.join('\n'));
                     copyBtn.textContent = t('logs_copied') || 'Copié !';
                     setTimeout(() => { copyBtn.textContent = t('logs_copy') || 'Copier'; }, 1500);
                 } catch (err) {

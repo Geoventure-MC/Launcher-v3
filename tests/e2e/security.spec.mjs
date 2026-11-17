@@ -223,6 +223,19 @@ test('règles pures : noms de fichiers de mods et adresse d\'authentification', 
   expect(m.findModFile(['minimap.jar-disable'], 'minimap.jar')).toBe('minimap.jar-disable');
   expect(m.modTargetName('a.jar', false)).toBe('a.jar-disable');
   expect(m.modTargetName('a.jar-disable', true)).toBe('a.jar');
+  // Jeu ouvert ? Sans dossier mods ou avec un jar libre : non, et le jar est remis exactement en place.
+  // mods.js charge fs/path par `require` (contexte Electron) : on le fournit pour exercer le vrai renommage.
+  if (typeof globalThis.require !== 'function') globalThis.require = (await import('node:module')).createRequire(import.meta.url);
+  const tmpGame = fs.mkdtempSync(path.join(ROOT, 'tests', '.tmp-inuse-'));
+  try {
+    expect(m.modsInUse(tmpGame)).toBe(false);
+    fs.mkdirSync(path.join(tmpGame, 'mods'));
+    fs.writeFileSync(path.join(tmpGame, 'mods', 'geomods-1.0.0-all.jar'), 'jar');
+    expect(m.modsInUse(tmpGame)).toBe(false);
+    expect(fs.readdirSync(path.join(tmpGame, 'mods'))).toEqual(['geomods-1.0.0-all.jar']);
+  } finally {
+    fs.rmSync(tmpGame, { recursive: true, force: true });
+  }
   const g = await import(path.join(ROOT, 'src/assets/js/utils/window-guard.js'));
   const guard = g.default || g;
   expect(guard.isSafeExternalUrl('https://geoventure.fr/x')).toBe(true);

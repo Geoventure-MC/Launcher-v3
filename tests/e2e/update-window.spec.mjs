@@ -32,6 +32,8 @@ test.describe('fenêtre de mise à jour', () => {
     mock.clearHits();
     try {
       const win = await P.app.firstWindow();
+      // Electron 45 : la fenêtre existe avant que loadFile ait fixé son adresse ; on attend la page.
+      await win.waitForURL(/index.html/, { timeout: 15000 });
       expect(win.url()).toContain('index.html');
       await win.waitForLoadState('domcontentloaded');
       const iso = await win.evaluate(() => ({

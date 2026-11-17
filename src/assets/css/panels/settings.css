@@ -1423,3 +1423,10 @@ input:checked+.slider:before {
     font: 400 11px/1.3 'Poppins', sans-serif;
     color: rgba(255, 255, 255, 0.65);
 }
+.lite-fx-option {
+    display: flex;
+    align-items: center;
+    margin-top: 14px;
+    font-size: 13px;
+    opacity: 0.85;
+}

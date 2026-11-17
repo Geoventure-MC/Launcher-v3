@@ -5,7 +5,7 @@
  *
  * Edited by CentralCorp Team
  */
-const { app, ipcMain, nativeTheme, dialog, shell } = require('electron');
+const { app, ipcMain, nativeTheme, dialog, shell, clipboard } = require('electron');
 const { autoUpdater } = require('electron-updater')
 
 const path = require('path');
@@ -93,6 +93,13 @@ ipcMain.on('main-window-maximize', () => {
 ipcMain.on('main-window-hide', () => { const w = main(); if (w) w.hide() })
 ipcMain.on('main-window-show', () => { const w = main(); if (w) w.show() })
 ipcMain.on('main-window-reload', () => { const w = main(); if (w) w.webContents.reload() })
+
+// Presse-papiers écrit par le processus principal : sous Electron 45, `require('electron').clipboard` n'est plus
+// fiable dans la fenêtre (le texte n'arrivait pas, le joueur gardait son ancien presse-papiers).
+ipcMain.handle('clipboard-write', (_, text) => {
+    clipboard.writeText(String(text ?? '').slice(0, 2_000_000));
+    return true;
+});
 
 ipcMain.handle('is-dark-theme', (_, theme) => {
     if (theme === 'dark') return true

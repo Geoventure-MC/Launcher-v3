@@ -29,6 +29,11 @@ const urlPattern = /^(https?:\/\/)/;
 
 class Launcher {
     async init() {
+        // Effets réduits (réglage du joueur, ou « réduire les animations » du système) : sans flou ni animation.
+        try {
+            const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (localStorage.getItem('geoventure_lite_fx') === '1' || reduce) document.body.classList.add('lite-fx');
+        } catch { /* jamais bloquant */ }
         this.initLog();
         console.log("Initializing Launcher...");
         if (process.platform === "win32") this.initFrame();

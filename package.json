@@ -45,7 +45,7 @@
     "dependencies": {
         "discord-rpc": "^4.0.1",
         "electron-updater": "^6.6.2",
-        "minecraft-java-core-azbetter": "^4.1.4",
+        "minecraft-java-core-azbetter": "4.1.4",
         "node-abi": "^4.24.0",
         "node-fetch": "^2.6.7",
         "xml-js": "^1.6.11"
@@ -54,8 +54,8 @@
         "@electron/rebuild": "^4.0.3",
         "@playwright/test": "^1.56.1",
         "cross-env": "^7.0.3",
-        "electron": "^37.2.0",
-        "electron-builder": "^26.6.0",
+        "electron": "^45.3.3",
+        "electron-builder": "^26.18.0",
         "javascript-obfuscator": "^4.1.0",
         "jimp": "^0.22.12",
         "nodemon": "^3.1.9",
