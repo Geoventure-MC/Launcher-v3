@@ -80,7 +80,8 @@ function loadConfigCache() {
 class Config {
     async GetConfig() {
         try {
-            const response = await fetch(getConfigUrl());
+            // no-store : jamais la config d'une ancienne version servie par le cache HTTP de Chromium.
+            const response = await fetch(getConfigUrl(), { cache: 'no-store' });
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status} sur ${getConfigUrl()}`);
             }

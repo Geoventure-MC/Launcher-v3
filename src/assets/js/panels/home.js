@@ -19,7 +19,7 @@ import { userKeepList } from '../utils/userdata.js';
 import { getInstallState, invalidateInstallState } from '../utils/installstate.js';
 import { withInstance, getSelectedChannel, setSelectedChannel, canAccessChannel, getChannelRoles, getAccountRoleName } from '../utils/instance.js';
 import { recordLaunch, addPlaytime, recordSession } from '../utils/achievements.js';
-import { isOfflineMode, offlineCacheDate, getAzAuthUrl } from '../utils/config.js';
+import config, { isOfflineMode, offlineCacheDate, getAzAuthUrl } from '../utils/config.js';
 import * as desktopNotify from '../utils/desktopNotify.js';
 import { openExternal } from '../utils/external.js';
 import { sanitizeHtml } from '../utils/sanitize.js';
@@ -323,6 +323,14 @@ class Home {
     }
 
     async _doLaunch(launchReq = {}) {
+        // Un launcher resté ouvert pendant une mise à jour gardait la config lue au démarrage : on la relit
+        // à chaque clic sur Jouer (panel injoignable : on garde celle qu'on a, le lancement n'est pas bloqué).
+        try {
+            const fresh = await config.GetConfig();
+            if (fresh && typeof fresh === 'object') this.config = fresh;
+        } catch (e) {
+            this.writeLauncherLog(`config non relue avant lancement : ${e && e.message ? e.message : e}`);
+        }
         // Defense in depth: refuse to launch while the server is in maintenance.
         if (this.config.maintenance === true) {
             const info = document.querySelector('.text-download');
@@ -457,7 +465,11 @@ class Home {
     getBaseUrl() {
         const baseUrl = settings_url.endsWith('/') ? settings_url : `${settings_url}/`;
         const url = pkg.env === 'azuriom' ? `${baseUrl}api/centralcorp/files` : `${baseUrl}data/`;
-        return withInstance(url);
+        // Cette URL ne sert qu'à la liste des fichiers du modpack, lue au lancement par la bibliothèque avec le
+        // fetch de Chromium : le panel la marque « max-age=30 », un clic sur Jouer juste après une mise à jour
+        // pouvait donc recevoir l'ANCIENNE liste et garder l'ancien jar. Le paramètre « _ » contourne ce cache.
+        const withInst = withInstance(url);
+        return `${withInst}${withInst.includes('?') ? '&' : '?'}_=${Date.now()}`;
     }
 
     // Per-server game directory (the default server keeps its legacy path).
