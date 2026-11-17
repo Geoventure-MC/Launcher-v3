@@ -46,7 +46,7 @@
         "discord-rpc": "^4.0.1",
         "electron-updater": "^6.6.2",
         "minecraft-java-core-azbetter": "4.1.4",
-        "node-abi": "^4.24.0",
+        "node-abi": "^4.40.0",
         "node-fetch": "^2.6.7",
         "xml-js": "^1.6.11"
     },
