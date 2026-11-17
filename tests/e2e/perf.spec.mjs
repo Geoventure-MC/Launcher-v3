@@ -8,8 +8,8 @@ import { ROOT } from './helpers.mjs';
 
 // Les modules purs du launcher sont de l'ESM dans un package sans "type": on les charge tels quels via une data: URL.
 const loadEsm = (rel) => import('data:text/javascript;base64,' + fs.readFileSync(path.join(ROOT, rel)).toString('base64'));
-const { buildProfile, recommendProfile, sanitizeJvmArgs, ramCapGb, launchRamMaxGb } = await loadEsm('src/assets/js/utils/perf.js');
-const { redact, tailLines } = await loadEsm('src/assets/js/utils/diagnostic.js');
+const { buildProfile, recommendProfile, sanitizeJvmArgs, withUtf8, ramCapGb, launchRamMaxGb } = await loadEsm('src/assets/js/utils/perf.js');
+const { redact, tailLines, parseGameStartSeconds, formatDuration, slowStartAdvice, gpuFromGameLog, describeLastLaunch } = await loadEsm('src/assets/js/utils/diagnostic.js');
 
 test('launchRamMaxGb : 60 % de la RAM, jamais plus que la machine', () => {
     expect(launchRamMaxGb(12, 16)).toBe(9);
@@ -58,6 +58,47 @@ test.describe('profils : règles pures', () => {
     expect(buildProfile('performance', { totalGb: 32, cores: 4 }).jvmArgs).toContain('-XX:+UseG1GC');
     expect(buildProfile('eco', { totalGb: 16, cores: 8 }).jvmArgs).toContain('-XX:+UseG1GC');
     expect(sanitizeJvmArgs('-Xmx9G -XX:+UseG1GC foo -Xms1G  -Dx=1')).toEqual(['-XX:+UseG1GC', '-Dx=1']);
+  });
+
+  test('UTF-8 : ajouté aux arguments JVM, jamais en double, choix du joueur respecté', () => {
+    expect(withUtf8(['-XX:+UseG1GC'])).toEqual(['-XX:+UseG1GC', '-Dfile.encoding=UTF-8']);
+    expect(withUtf8([])).toEqual(['-Dfile.encoding=UTF-8']);
+    expect(withUtf8(['-Dfile.encoding=UTF-8'])).toEqual(['-Dfile.encoding=UTF-8']);
+    expect(withUtf8(['-Dfile.encoding=Cp1252'])).toEqual(['-Dfile.encoding=Cp1252']);
+    expect(withUtf8(null)).toEqual(['-Dfile.encoding=UTF-8']);
+  });
+
+  test('démarrage du jeu : durée lue dans « Game took », durées lisibles, pistes si lent', () => {
+    // Lignes réelles des journaux de joueurs (Windows N150 : 547 s ; ModernFix écrit le point décimal).
+    expect(parseGameStartSeconds('[17nov.2026 12:45:01.956] [Render thread/WARN] [ModernFix/]: Game took 547.027 seconds to start')).toBeCloseTo(547.027);
+    expect(parseGameStartSeconds('Game took 42 seconds to start')).toBe(42);
+    expect(parseGameStartSeconds('Game took 12,5 seconds to start')).toBeCloseTo(12.5);
+    expect(parseGameStartSeconds('rien à voir')).toBeNull();
+    expect(parseGameStartSeconds(null)).toBeNull();
+    expect(formatDuration(45_000)).toBe('45 s');
+    expect(formatDuration(185_000)).toBe('3 min 05 s');
+    expect(formatDuration(3_720_000)).toBe('1 h 02 min');
+    expect(slowStartAdvice(100, 'win32')).toEqual([]);
+    expect(slowStartAdvice(547, 'win32')).toEqual(['antivirus', 'programs']);
+    expect(slowStartAdvice(547, 'linux')).toEqual(['programs']);
+  });
+
+  test('diagnostic : dernier lancement (jeu fini, figé, jamais lancé) et GPU lu dans le journal du jeu', () => {
+    expect(gpuFromGameLog('[x] [Embeddium-PostlaunchChecks/]: OpenGL Renderer: Mesa Intel(R) Graphics (RPL-U)\nautre')).toBe('Mesa Intel(R) Graphics (RPL-U)');
+    expect(gpuFromGameLog('pas de ligne GPU')).toBeNull();
+    expect(describeLastLaunch(null)).toMatch(/Aucun lancement enregistré/);
+    const t0 = Date.UTC(2026, 10, 17, 11, 35, 0);
+    const base = { clickAt: t0, phases: [{ name: 'check', ms: 90_000 }, { name: 'download', ms: 30_000 }], javaStartAt: t0 + 120_000, gameStartSeconds: 547 };
+    const done = describeLastLaunch({ ...base, endedAt: t0 + 900_000, exitCode: 0 }, { now: t0 + 1_000_000 });
+    expect(done).toMatch(/vérification 1 min 30 s, téléchargement 30 s/);
+    expect(done).toMatch(/Jeu lancé 2 min 00 s après le clic/);
+    expect(done).toMatch(/9 min 07 s \(LENT\)/);
+    expect(done).toMatch(/Jeu fermé .*code 0/);
+    // Cas du journal Linux : jeu lancé, aucune fermeture, journal muet depuis 6 min.
+    const frozen = describeLastLaunch(base, { now: t0 + 600_000, latestLogMtimeMs: t0 + 240_000 });
+    expect(frozen).toMatch(/Aucune fermeture enregistrée/);
+    expect(frozen).toMatch(/il y a 6 min 00 s -> journal muet/);
+    expect(describeLastLaunch({ clickAt: t0, phases: [] })).toMatch(/ne s'est pas lancé/);
   });
 
   test('masquage : jetons, mots de passe, e-mails, home -> ~', () => {

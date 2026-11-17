@@ -312,5 +312,8 @@
     "game_already_running": "Minecraft est déjà ouvert : fermez le jeu, puis cliquez de nouveau sur Jouer pour recevoir la mise à jour.",
     "lite_fx_option": "Effets réduits (sans flou ni animation) : launcher plus fluide sur les petites machines",
     "server_offline_notice": "Le serveur est hors ligne pour le moment (redémarrage probable) : le jeu se lance quand même, la connexion sera possible dans quelques minutes.",
-    "server_full_notice": "Le serveur est plein pour le moment : la connexion peut être refusée."
+    "server_full_notice": "Le serveur est plein pour le moment : la connexion peut être refusée.",
+    "slow_start_head": "Votre jeu a mis {min} min à démarrer.",
+    "slow_start_antivirus": "Ajoutez le dossier {dir} aux exclusions de votre antivirus (Sécurité Windows > Protection contre les virus et menaces > Exclusions) : il analyse chaque mod à chaque démarrage.",
+    "slow_start_programs": "Fermez les autres programmes avant de jouer et gardez le profil « Économique » (Réglages, onglet RAM)."
 }

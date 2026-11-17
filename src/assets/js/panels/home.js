@@ -8,10 +8,10 @@
 'use strict';
 
 import { logger, database, changePanel, t } from '../utils.js';
-import { sanitizeJvmArgs, launchRamMaxGb, toGb, buildProfile, recommendProfile } from '../utils/perf.js';
+import { sanitizeJvmArgs, withUtf8, launchRamMaxGb, toGb, buildProfile, recommendProfile } from '../utils/perf.js';
 import { sendEvent, sendErrorEvent, isConsented } from '../utils/telemetry.js';
 import { resolveLaunchJavaConfig } from '../utils/java.js';
-import { collectCrashReport } from '../utils/diagnostic.js';
+import { collectCrashReport, parseGameStartSeconds, formatDuration, slowStartAdvice } from '../utils/diagnostic.js';
 import { validatePanel } from '../utils/schema-validator.js';
 import { getGameDirectory, getGameDirectoryFor } from '../utils/gamedir.js';
 import { applyForgeWindowSettings } from '../utils/forgeconfig.js';
@@ -311,6 +311,8 @@ class Home {
         if (!container) return;
         const old = container.querySelector('[data-server-state]');
         if (old) old.remove();
+        const oldSlow = container.querySelector('[data-slow-start]');
+        if (oldSlow) oldSlow.remove();
         if (!s || Date.now() - s.at > 5 * 60 * 1000) return;
         let msg = null;
         if (!s.online) {
@@ -402,6 +404,7 @@ class Home {
 
         await this.verifyModsBeforeLaunch();
         this._launchStartMs = Date.now();
+        this._initLaunchState();
         this._voluntaryClose = false;
         const fml = applyForgeWindowSettings(this.gameDir());
         this.writeLauncherLog(`fml.toml ${fml.file} : earlyWindowControl=${fml.value}${fml.ok ? '' : ' (NON appliqué' + (fml.error ? ' : ' + fml.error : '') + ')'}`);
@@ -447,7 +450,8 @@ class Home {
         const rawArgs = (javaArgs && Array.isArray(javaArgs.args))
             ? javaArgs.args
             : buildProfile(recommendProfile(totalGb, cores), { totalGb, cores }).jvmArgs;
-        const jvmArgs = sanitizeJvmArgs(rawArgs);
+        // UTF-8 forcé : sans lui, Java 17 écrit les accents du jeu et des mods en cp1252 sous Windows.
+        const jvmArgs = withUtf8(sanitizeJvmArgs(rawArgs));
         const gameArgs = [];
         if (launchReq && launchReq.joinServer) {
             const target = this._directServerTarget || this.config.status || {};
@@ -609,10 +613,98 @@ class Home {
         this._lastTime = null;
     }
 
+    // ── Journal du lancement (launcher.log + logs/last-launch.json lu par le diagnostic) ───────────────────────────
+    _launchStateFile() {
+        return path.join(this.gameDir(), 'logs', 'last-launch.json');
+    }
+
+    _saveLaunchState() {
+        try {
+            const file = this._launchStateFile();
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, JSON.stringify(this._launchState || {}));
+        } catch { /* le journal ne doit jamais gêner le lancement */ }
+    }
+
+    _initLaunchState() {
+        this._launchState = { clickAt: Date.now(), phases: [] };
+        this._phaseName = null;
+        this._phaseStartedAt = null;
+        this._saveLaunchState();
+    }
+
+    /** Une phase de préparation (téléchargement, vérification, patch…) change : on note la durée de la précédente. */
+    _notePhase(next) {
+        const st = this._launchState;
+        if (!st) return;
+        const now = Date.now();
+        if (this._phaseName && this._phaseStartedAt) {
+            const ms = now - this._phaseStartedAt;
+            st.phases.push({ name: this._phaseName, ms });
+            this.writeLauncherLog(`phase « ${this._phaseName} » terminée en ${formatDuration(ms)}`);
+        }
+        this._phaseName = next || null;
+        this._phaseStartedAt = next ? now : null;
+        this._saveLaunchState();
+    }
+
+    /** Premier message du jeu : Java est lancé. */
+    _noteJavaStarted() {
+        const st = this._launchState;
+        if (!st || st.javaStartAt) return;
+        this._notePhase(null);
+        st.javaStartAt = Date.now();
+        this.writeLauncherLog(`jeu lancé ${formatDuration(st.javaStartAt - st.clickAt)} après le clic sur Jouer (vérification, téléchargement, préparation)`);
+        this._saveLaunchState();
+    }
+
+    /** ModernFix annonce « Game took N seconds to start » : le jeu a atteint le menu. */
+    _noteGameStartSeconds(seconds) {
+        const st = this._launchState;
+        if (!st || st.gameStartSeconds != null) return;
+        st.gameStartSeconds = seconds;
+        this.writeLauncherLog(`le jeu a mis ${formatDuration(seconds * 1000)} à démarrer (jusqu'au menu)`);
+        this._saveLaunchState();
+    }
+
+    _noteGameEnded(exitCode) {
+        const st = this._launchState;
+        if (!st || st.endedAt) return;
+        st.endedAt = Date.now();
+        st.exitCode = exitCode;
+        const played = st.javaStartAt ? ` après ${formatDuration(st.endedAt - st.javaStartAt)}` : '';
+        this.writeLauncherLog(`jeu fermé (code ${exitCode === null ? '?' : exitCode})${played}`);
+        this._saveLaunchState();
+        this.showSlowStartTip(st.gameStartSeconds);
+    }
+
+    /** Démarrage lent : des pistes concrètes dans le bandeau (visible au retour sur le launcher). */
+    showSlowStartTip(seconds) {
+        const advice = slowStartAdvice(seconds, process.platform);
+        const container = document.getElementById('notifications-banner');
+        if (!advice.length || !container) return;
+        const old = container.querySelector('[data-slow-start]');
+        if (old) old.remove();
+        const lines = [(t('slow_start_head') || 'Votre jeu a mis {min} min à démarrer.').replace('{min}', String(Math.round(seconds / 60)))];
+        if (advice.includes('antivirus')) {
+            lines.push((t('slow_start_antivirus') || 'Ajoutez le dossier {dir} aux exclusions de votre antivirus (Sécurité Windows > Protection contre les virus et menaces > Exclusions) : il analyse chaque mod à chaque démarrage.').replace('{dir}', this.gameDir()));
+        }
+        if (advice.includes('programs')) {
+            lines.push(t('slow_start_programs') || 'Fermez les autres programmes avant de jouer et gardez le profil « Économique » (Réglages, onglet RAM).');
+        }
+        const el = document.createElement('div');
+        el.className = 'notification-item';
+        el.dataset.slowStart = '1';
+        el.innerHTML = `<span class="notif-icon">🐢</span><span class="notif-message">${lines.map(escapeHtml).join('<br>')}</span>`;
+        container.insertBefore(el, container.firstChild);
+        container.style.display = 'block';
+    }
+
     // Track the current phase; resets the speed estimator on phase change so the
     // smoothed rate doesn't carry over from a different operation.
     _setPhase(phase) {
         if (this.currentPhase !== phase) {
+            this._notePhase(phase);
             this.currentPhase = phase;
             this._lastBytes = null;
             this._lastTime = null;
@@ -734,6 +826,9 @@ class Home {
         progressBar.style.display = "none";
         info.innerHTML = t('starting');
         this.appendLog(String(e));
+        this._noteJavaStarted();
+        const startSeconds = parseGameStartSeconds(String(e));
+        if (startSeconds !== null) this._noteGameStartSeconds(startSeconds);
 
         // Achievements: the game has actually started — count the launch and
         // stamp the play start so we can accumulate playtime on close. Wrapped
@@ -855,6 +950,7 @@ class Home {
         const sessionDuration = Math.round((Date.now() - sessionStart) / 1000);
         const exitCode = typeof code === 'number' ? code : null;
         const crashed = exitCode !== null && exitCode !== 0 && !this._voluntaryClose;
+        this._noteGameEnded(exitCode);
 
         sendEvent('close', { sessionDuration, ...(exitCode !== null ? { exitCode } : {}) });
 

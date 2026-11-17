@@ -312,5 +312,8 @@
     "game_already_running": "Minecraft is already running: close the game, then click Play again to get the update.",
     "lite_fx_option": "Reduced effects (no blur or animation): smoother launcher on low-end machines",
     "server_offline_notice": "The server is offline right now (probably restarting): the game still launches, you can join in a few minutes.",
-    "server_full_notice": "The server is full right now: joining may be refused."
+    "server_full_notice": "The server is full right now: joining may be refused.",
+    "slow_start_head": "Your game took {min} min to start.",
+    "slow_start_antivirus": "Add the folder {dir} to your antivirus exclusions (Windows Security > Virus & threat protection > Exclusions): it scans every mod at each start.",
+    "slow_start_programs": "Close other programs before playing and keep the \"Economy\" profile (Settings, RAM tab)."
 }

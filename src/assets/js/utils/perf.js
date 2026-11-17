@@ -89,6 +89,16 @@ export function buildProfile(id, { totalGb, cores = 4 }) {
     };
 }
 
+/**
+ * Ajoute -Dfile.encoding=UTF-8 si le joueur n'en a pas mis un : Java 17 prend sinon l'encodage de Windows (cp1252) et
+ * les accents des journaux du jeu et des mods devenaient « dessin�s ». Java 18+ est en UTF-8 d'office.
+ */
+export const UTF8_ARG = '-Dfile.encoding=UTF-8';
+export function withUtf8(args) {
+    const list = Array.isArray(args) ? args.slice() : [];
+    return list.some(a => /^-Dfile\.encoding=/i.test(String(a))) ? list : [...list, UTF8_ARG];
+}
+
 /** Nettoie une saisie d'arguments JVM : jetons commençant par « - », sans -Xms/-Xmx (gérés par les curseurs RAM). */
 export function sanitizeJvmArgs(input) {
     const tokens = Array.isArray(input) ? input : String(input || '').split(/\s+/);

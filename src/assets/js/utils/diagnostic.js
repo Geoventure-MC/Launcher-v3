@@ -125,6 +125,89 @@ function detectJava(gameDir, javaPath) {
     return lines.join('\n');
 }
 
+// ── Dernier lancement : durées, état, GPU lu dans le journal du jeu (fonctions PURES, testables) ──────────────────
+
+/** Au-delà, un démarrage du jeu (jusqu'au menu) est jugé lent et le launcher donne des pistes. */
+export const SLOW_START_SECONDS = 180;
+
+/** Secondes de démarrage imprimées par ModernFix (« Game took 547.027 seconds to start »), ou null. */
+export function parseGameStartSeconds(text) {
+    const m = /Game took ([\d.,]+) seconds to start/i.exec(String(text || ''));
+    if (!m) return null;
+    const n = Number(m[1].replace(',', '.'));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/** « 45 s », « 3 min 05 s », « 1 h 02 min ». */
+export function formatDuration(ms) {
+    const s = Math.max(0, Math.round(Number(ms) / 1000));
+    if (!Number.isFinite(s)) return '?';
+    if (s < 60) return `${s} s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} min ${String(s % 60).padStart(2, '0')} s`;
+    return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
+
+/** Pistes à donner pour un démarrage lent : [] si le démarrage est normal. */
+export function slowStartAdvice(seconds, platform) {
+    if (!(Number(seconds) > SLOW_START_SECONDS)) return [];
+    const advice = [];
+    if (platform === 'win32') advice.push('antivirus');
+    advice.push('programs');
+    return advice;
+}
+
+/** Carte graphique lue dans le journal du jeu (« OpenGL Renderer: … »), utile quand Electron ne la connaît pas. */
+export function gpuFromGameLog(text) {
+    const m = /OpenGL Renderer:\s*(.+)/.exec(String(text || ''));
+    return m ? m[1].trim().slice(0, 120) : null;
+}
+
+const PHASE_LABELS = { download: 'téléchargement', extract: 'extraction', check: 'vérification', patch: 'patch Forge' };
+
+/**
+ * Résumé du dernier lancement pour le rapport. `state` vient de logs/last-launch.json
+ * { clickAt, javaStartAt, gameStartSeconds, endedAt, exitCode, phases:[{name,ms}] } ; `latestLogMtimeMs` : date de
+ * dernière écriture de logs/latest.log (ou null).
+ */
+export function describeLastLaunch(state, { now = Date.now(), latestLogMtimeMs = null } = {}) {
+    if (!state || typeof state !== 'object' || !state.clickAt) return 'Aucun lancement enregistré depuis la mise à jour du launcher.';
+    const lines = [`Clic sur Jouer: ${new Date(state.clickAt).toISOString()}`];
+    if (Array.isArray(state.phases) && state.phases.length) {
+        lines.push('Préparation: ' + state.phases.map(p => `${PHASE_LABELS[p.name] || p.name} ${formatDuration(p.ms)}`).join(', '));
+    }
+    if (state.javaStartAt) {
+        lines.push(`Jeu lancé ${formatDuration(state.javaStartAt - state.clickAt)} après le clic (vérification, téléchargement, préparation)`);
+    } else {
+        lines.push('Le jeu ne s\'est pas lancé : arrêt pendant la préparation (voir launcher.log).');
+    }
+    if (state.gameStartSeconds != null) {
+        const slow = state.gameStartSeconds > SLOW_START_SECONDS ? ' (LENT)' : '';
+        lines.push(`Démarrage du jeu jusqu'au menu: ${formatDuration(state.gameStartSeconds * 1000)}${slow}`);
+    }
+    if (state.endedAt) {
+        lines.push(`Jeu fermé le ${new Date(state.endedAt).toISOString()}, code ${state.exitCode ?? '?'}` +
+            (state.javaStartAt ? `, après ${formatDuration(state.endedAt - state.javaStartAt)} depuis le lancement de Java` : ''));
+    } else if (state.javaStartAt) {
+        lines.push('Aucune fermeture enregistrée : le jeu tourne encore, ou le launcher a été fermé avant la fin.');
+        if (latestLogMtimeMs) {
+            const age = now - latestLogMtimeMs;
+            lines.push(`Dernière écriture du journal du jeu: il y a ${formatDuration(age)}` +
+                (age > SLOW_START_SECONDS * 1000 ? ' -> journal muet : jeu figé, planté ou chargement très long' : ''));
+        }
+    }
+    return lines.join('\n');
+}
+
+/** logs/last-launch.json lu et ses dates (renderer uniquement) ; { state: null } si absent ou illisible. */
+function readLastLaunch(logsDir) {
+    const fs = require('fs'), path = require('path');
+    const out = { state: null, latestMtime: null };
+    try { out.state = JSON.parse(fs.readFileSync(path.join(logsDir, 'last-launch.json'), 'utf8')); } catch { /* absent */ }
+    try { out.latestMtime = fs.statSync(path.join(logsDir, 'latest.log')).mtimeMs; } catch { /* absent */ }
+    return out;
+}
+
 /**
  * Collecte et assemble le rapport (renderer uniquement).
  * @param {object} c { pkg, config, gameDir, settingsUrl, azauthUrl, instance, hw, javaPath, ram, jvmArgs, profile, secrets }
@@ -146,7 +229,7 @@ export async function collectDiagnostic(c) {
     const hardware = [
         `RAM: ${hw.totalGb} Go au total, ${hw.freeGb} Go libres`,
         `CPU: ${hw.cores} coeurs - ${hw.cpuModel}`,
-        `GPU: ${hw.gpu || 'inconnu'}`,
+        `GPU: ${hw.gpu || 'inconnu'}`,   // complété plus bas depuis le journal du jeu si Electron ne la connaît pas
     ];
     const config = [
         `Instance active: ${c.instance || '(globale)'}`,
@@ -168,6 +251,12 @@ export async function collectDiagnostic(c) {
     const logs = path.join(c.gameDir, 'logs');
     const launcherLog = readTail(path.join(logs, 'launcher.log'));
     const latestLog = readTail(path.join(logs, 'latest.log'));
+    // GPU « inconnu » (fréquent sous Linux/Wayland) : le jeu l'écrit lui-même dans son journal.
+    if (!hw.gpu) {
+        const fromGame = gpuFromGameLog(latestLog);
+        if (fromGame) hardware[2] = `GPU: ${fromGame} (lu dans le journal du jeu)`;
+    }
+    const last = readLastLaunch(logs);
 
     const raw = formatReport([
         { title: 'Nexus - rapport de diagnostic', body: `Généré le ${now.toISOString()}` },
@@ -175,6 +264,7 @@ export async function collectDiagnostic(c) {
         { title: 'Matériel', body: hardware.join('\n') },
         { title: 'Java', body: detectJava(c.gameDir, c.javaPath) },
         { title: 'Configuration', body: config.join('\n') },
+        { title: 'Dernier lancement', body: describeLastLaunch(last.state, { now: Date.now(), latestLogMtimeMs: last.latestMtime }) },
         { title: 'Réseau', body: net.join('\n') },
         { title: `launcher.log (${LOG_LINES} dernières lignes)`, body: launcherLog || '(absent)' },
         { title: `latest.log (${LOG_LINES} dernières lignes)`, body: latestLog || '(absent)' },
