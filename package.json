@@ -1,0 +1,16 @@
+{
+  "name": "geoventure-launcher-rust",
+  "version": "2.0.0-rust.1",
+  "private": true,
+  "description": "Launcher Geoventure moderne en Rust (Tauri v2)",
+  "scripts": {
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 npx tauri dev",
+    "build": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 npx tauri build",
+    "build:release": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "check:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo check --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
+  }
+}

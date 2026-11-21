@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Geoventure Launcher</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>Geoventure Launcher</h1>
+        <span id="status-badge" class="badge">Connexion…</span>
+      </div>
+      <div class="topbar-actions">
+        <select id="instance-select" aria-label="Serveur">
+          <option value="geoventure">Geoventure</option>
+          <option value="elandor">Elandor</option>
+          <option value="pokeland">Pokeland</option>
+        </select>
+        <select id="channel-select" aria-label="Canal">
+          <option value="stable">Stable</option>
+          <option value="test">Test</option>
+        </select>
+        <button id="btn-refresh" class="btn-secondary">Actualiser</button>
+        <button id="btn-devtools" class="btn-secondary" title="Ouvrir DevTools (F12)">F12</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card">
+        <h2>Compte Azuriom</h2>
+        <div id="az-account-box" class="account-box hidden">
+          <img id="az-avatar" class="avatar" alt="Skin Azuriom" />
+          <div class="account-meta">
+            <strong id="az-username">—</strong>
+            <span id="az-role" class="muted">—</span>
+          </div>
+          <button id="btn-logout" class="btn-secondary">Déconnexion</button>
+        </div>
+
+        <form id="az-login-form" class="form-stack">
+          <label>
+            Email ou pseudo Azuriom
+            <input id="az-email" type="text" autocomplete="username" required placeholder="joueur@geoventure.fr" />
+          </label>
+          <label>
+            Mot de passe
+            <input id="az-password" type="password" autocomplete="current-password" required />
+          </label>
+          <label id="az-2fa-wrap" class="hidden">
+            Code 2FA Azuriom
+            <input id="az-2fa" type="text" inputmode="numeric" maxlength="10" placeholder="123456" />
+          </label>
+          <button type="submit" class="btn-primary">Se connecter via Azuriom</button>
+        </form>
+        <p id="az-status" class="muted"></p>
+      </section>
+
+      <section class="card">
+        <h2>Instance &amp; Java 17</h2>
+        <div id="panel-info" class="info-list">
+          <div><span>Panel :</span> <strong id="info-panel">launcher.geoventure.fr</strong></div>
+          <div><span>Version :</span> <strong id="info-version">—</strong></div>
+          <div><span>Java :</span> <strong id="info-java">Détection…</strong></div>
+          <div><span>RAM / Profil :</span> <strong id="info-ram">—</strong></div>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+          <small id="progress-text" class="muted">Prêt</small>
+        </div>
+        <div class="action-row">
+          <button id="btn-sync" class="btn-secondary">Vérifier &amp; synchroniser</button>
+          <button id="btn-play" class="btn-primary" disabled>Jouer</button>
+        </div>
+      </section>
+
+      <section class="card console-card">
+        <div class="console-header">
+          <h2>Console de logs intégrée</h2>
+          <div class="console-actions">
+            <button id="btn-copy-logs" class="btn-secondary">Copier</button>
+            <button id="btn-clear-logs" class="btn-secondary">Effacer</button>
+          </div>
+        </div>
+        <pre id="log-output" class="log-output"></pre>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
