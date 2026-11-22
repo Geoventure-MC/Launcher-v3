@@ -875,9 +875,10 @@ impl Installer {
     }
 }
 
-/// Désactive la fenêtre de chargement anticipée de Forge (`config/fml.toml`,
-/// `earlyWindowControl = false`), comme le launcher Electron : sur certains pilotes elle affichait
-/// le logo Mojang rouge puis figeait. Renvoie `true` si le réglage est bien en place après relecture.
+/// Garde la fenêtre de chargement de Forge ACTIVÉE (`config/fml.toml`, `earlyWindowControl = true`).
+/// Désactivée, rien ne s'affiche entre le démarrage de Java et la fenêtre du jeu (12 s sur un PC
+/// rapide, plusieurs minutes sur une petite config) : les joueurs croyaient que le jeu ne se
+/// lançait pas. Renvoie `true` si le réglage est bien en place après relecture.
 pub fn apply_forge_window_settings(game_dir: &Path) -> bool {
     let file = game_dir.join("config").join("fml.toml");
     let _ = std::fs::create_dir_all(game_dir.join("config"));
@@ -889,14 +890,14 @@ pub fn apply_forge_window_settings(game_dir: &Path) -> bool {
             let t = l.trim_start();
             if t.starts_with("earlyWindowControl") && t["earlyWindowControl".len()..].trim_start().starts_with('=') {
                 found = true;
-                "earlyWindowControl = false".to_string()
+                "earlyWindowControl = true".to_string()
             } else {
                 l.to_string()
             }
         })
         .collect();
     if !found {
-        lines.push("earlyWindowControl = false".to_string());
+        lines.push("earlyWindowControl = true".to_string());
     }
     let mut out = lines.join("\n");
     out.push('\n');
@@ -904,7 +905,7 @@ pub fn apply_forge_window_settings(game_dir: &Path) -> bool {
         let _ = std::fs::write(&file, &out);
     }
     std::fs::read_to_string(&file)
-        .map(|t| t.lines().any(|l| l.trim() == "earlyWindowControl = false"))
+        .map(|t| t.lines().any(|l| l.trim() == "earlyWindowControl = true"))
         .unwrap_or(false)
 }
 
@@ -1111,15 +1112,15 @@ mod tests {
     }
 
     #[test]
-    fn fml_toml_early_window_is_disabled_without_losing_other_keys() {
+    fn fml_toml_early_window_is_enabled_without_losing_other_keys() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("config")).unwrap();
-        std::fs::write(tmp.path().join("config/fml.toml"), "maxThreads = -1\nearlyWindowControl = true\n").unwrap();
+        std::fs::write(tmp.path().join("config/fml.toml"), "maxThreads = -1\nearlyWindowControl = false\n").unwrap();
         assert!(apply_forge_window_settings(tmp.path()));
         let t = std::fs::read_to_string(tmp.path().join("config/fml.toml")).unwrap();
         assert!(t.contains("maxThreads = -1"));
-        assert!(t.contains("earlyWindowControl = false"));
-        assert!(!t.contains("true"));
+        assert!(t.contains("earlyWindowControl = true"));
+        assert!(!t.contains("false"));
         let empty = tempfile::tempdir().unwrap();
         assert!(apply_forge_window_settings(empty.path()));
     }

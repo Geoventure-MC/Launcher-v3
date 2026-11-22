@@ -80,7 +80,8 @@ async fn main() {
         uuid: "00000000-0000-0000-0000-000000000001".into(),
         access_token: "0".into(),
         ram_min_gb: 2,
-        ram_max_gb: 4,
+        // E2E_RAM=3 pour tester une petite configuration.
+        ram_max_gb: std::env::var("E2E_RAM").ok().and_then(|v| v.parse().ok()).unwrap_or(4),
         extra_jvm_args: vec![],
         server_host: None,
         server_port: None,

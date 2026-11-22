@@ -638,7 +638,7 @@ async fn run_launch(
             &state.logs,
             LogLevel::Info,
             "launch",
-            format!("fml.toml : earlyWindowControl=false {}", if ok { "appliqué" } else { "NON appliqué" }),
+            format!("fml.toml : earlyWindowControl=true {}", if ok { "appliqué" } else { "NON appliqué" }),
         );
     }
 
@@ -696,12 +696,25 @@ async fn run_launch(
     let logs_exit = state.logs.clone();
     let after_exit = after.clone();
     let running_exit = Arc::clone(&state.game_running);
+    let hide_on_window = after == "hide";
+    let window_seen = Arc::new(AtomicBool::new(false));
+    let win_hide = window.clone();
+    let window_seen_watch = Arc::clone(&window_seen);
     let pid = spawn_resolved_forge_with_exit(
         &java_path.to_string_lossy(),
         &game_dir,
         &plan,
         state.logs.clone(),
         move |entry| {
+            // « Cacher le launcher » : seulement quand une fenêtre du jeu est vraiment à l'écran
+            // (fenêtre de chargement de Forge ou de Minecraft), jamais avant.
+            if hide_on_window
+                && !window_seen.load(Ordering::SeqCst)
+                && is_game_window_line(&entry.message)
+            {
+                window_seen.store(true, Ordering::SeqCst);
+                let _ = win_hide.hide();
+            }
             let _ = app_log.emit("launcher://log", entry);
         },
         move |code| {
@@ -723,10 +736,29 @@ async fn run_launch(
     state.game_running.store(true, Ordering::SeqCst);
 
     emit_log(app, &state.logs, LogLevel::Info, "launch", format!("Minecraft démarré (PID {pid})."));
+    // Garde-fou : 3 min sans fenêtre de jeu → le launcher reste/revient au premier plan avec un message.
+    {
+        let app_w = app.clone();
+        let win_w = window.clone();
+        let logs_w = state.logs.clone();
+        let running_w = Arc::clone(&state.game_running);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+            if running_w.load(Ordering::SeqCst) && !window_seen_watch.load(Ordering::SeqCst) {
+                let entry = logs_w.push(
+                    LogLevel::Warn,
+                    "launch",
+                    "Aucune fenêtre de jeu après 3 minutes : le chargement est très long ou bloqué. Lancez un diagnostic s'il n'apparaît pas.",
+                );
+                let _ = app_w.emit("launcher://log", entry);
+                let _ = app_w.emit("launcher://game-slow", ());
+                let _ = win_w.show();
+                let _ = win_w.set_focus();
+            }
+        });
+    }
     match after.as_str() {
-        "hide" => {
-            let _ = window.hide();
-        }
+        // « hide » : la fenêtre est cachée dans le rappel du journal, quand le jeu est visible.
         "close" => {
             let app_c = app.clone();
             tokio::spawn(async move {
@@ -737,6 +769,14 @@ async fn run_launch(
         _ => {}
     }
     Ok(pid)
+}
+
+/// Ligne du journal qui prouve qu'une fenêtre du jeu est à l'écran : fenêtre de chargement de
+/// Forge (`EARLYDISPLAY`) ou fenêtre de Minecraft.
+pub fn is_game_window_line(line: &str) -> bool {
+    (line.contains("EARLYDISPLAY") && (line.contains("Requested GL version") || line.contains("GL info")))
+        || line.contains("Backend library: LWJGL")
+        || line.contains("Setting user:")
 }
 
 /// Routes du panel que l'interface peut lire (lecture seule, liste fermée).
@@ -1085,6 +1125,13 @@ pub async fn set_optional_mod(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_window_lines_are_detected() {
+        assert!(is_game_window_line("[main/INFO] [EARLYDISPLAY/]: Requested GL version 4.5 got version 4.5"));
+        assert!(is_game_window_line("[Render thread/INFO] [minecraft/Minecraft]: Setting user: Steve"));
+        assert!(!is_game_window_line("[main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: ModLauncher running"));
+    }
 
     #[test]
     fn mod_file_names_are_confined() {

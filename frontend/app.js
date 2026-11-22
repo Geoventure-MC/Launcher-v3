@@ -721,7 +721,7 @@
       });
       const pid = await result;
       state.gameRunning = true;
-      $('dock-phase').textContent = '🎮 Minecraft est lancé, bon jeu !';
+      $('dock-phase').textContent = '🎮 Ouverture du jeu… (le chargement des mods peut prendre une minute)';
       $('dock-pct').textContent = '';
       $('progress-fill').classList.remove('indeterminate');
       $('progress-fill').style.width = '100%';
@@ -1174,6 +1174,7 @@
       on('launcher://install-progress', (e) => onInstallProgress(e.payload)),
       on('launcher://launch-result', (e) => onLaunchResult(e.payload)),
       on('launcher://game-exit', (e) => onGameExit(e.payload)),
+      on('launcher://game-slow', () => toast('🐢 Le jeu met longtemps à s’ouvrir. Patientez encore un peu ; s’il n’apparaît pas, lancez un diagnostic.')),
       on('launcher://update-progress', (e) => { const p = e.payload || {}; $('update-fill').style.width = `${p.total ? Math.round((p.downloaded / p.total) * 100) : 0}%`; }),
       on('launcher://update-error', (e) => { $('update-overlay').classList.add('hidden'); toast(`Mise à jour impossible : ${e.payload}`); }),
     ]);

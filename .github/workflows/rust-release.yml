@@ -105,7 +105,7 @@ jobs:
           releaseBody: |
             Pré-version du nouveau launcher Geoventure (Rust / Tauri). À installer à côté du launcher actuel, qui continue de se mettre à jour normalement.
 
-            Dernier changement : ${{ github.event.head_commit.message }}
+            Dernier changement : ${{ github.event.head_commit.message || 'voir l’historique de la branche rust' }}
           releaseDraft: false
           prerelease: true
           includeUpdaterJson: true
