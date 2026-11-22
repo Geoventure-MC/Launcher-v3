@@ -170,6 +170,18 @@
               <p id="play-block-reason" class="muted small center"></p>
             </div>
 
+            <div class="card reveal hidden" id="affluence-card">
+              <h3 class="card-title">Affluence <span class="muted small">48 h</span></h3>
+              <div class="affluence" id="affluence-bars" role="img" aria-label="Joueurs connectés heure par heure"></div>
+              <p class="muted small" id="affluence-peak"></p>
+            </div>
+
+            <div class="card reveal hidden" id="video-card">
+              <h3 class="card-title">Vidéo de la communauté</h3>
+              <button class="video-thumb" id="video-thumb" aria-label="Lire la vidéo"><img id="video-img" alt="" /><span class="video-play" aria-hidden="true">▶</span></button>
+              <button class="btn btn-small" id="video-open">Voir sur YouTube</button>
+            </div>
+
             <div class="card reveal" id="events-card">
               <h3 class="card-title">Événements</h3>
               <div id="game-events" class="events"><p class="muted small">Aucun événement pour le moment.</p></div>
@@ -232,6 +244,7 @@
           <button class="tab" data-tab="perf" role="tab">⚡ Performances</button>
           <button class="tab active" data-tab="game" role="tab">🎮 Jeu</button>
           <button class="tab" data-tab="mods" role="tab">🧩 Mods</button>
+          <button class="tab" data-tab="content" role="tab">🖼️ Contenu</button>
           <button class="tab" data-tab="advanced" role="tab">🛠️ Avancé</button>
         </div>
 
@@ -292,6 +305,7 @@
             </label>
             <label class="toggle"><input type="checkbox" id="join-server" /><span>Se connecter directement au serveur au lancement</span></label>
             <label class="toggle"><input type="checkbox" id="reduce-motion" /><span>Réduire les animations</span></label>
+            <label class="toggle"><input type="checkbox" id="discord-rpc" /><span>Afficher mon activité Geoventure sur Discord</span></label>
           </div>
         </div>
 
@@ -300,6 +314,34 @@
           <div class="card">
             <h3 class="card-title">Mods optionnels</h3>
             <div id="optional-mods" class="mods"><p class="muted small">Aucun mod optionnel.</p></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Mods de la communauté</h3>
+            <p class="muted small">Des mods conseillés par l’équipe, à ajouter si vous le souhaitez. Ils restent installés aux mises à jour du modpack.</p>
+            <div class="inline">
+              <input id="community-search" type="search" placeholder="Rechercher un mod…" aria-label="Rechercher un mod de la communauté" />
+            </div>
+            <div class="chips" id="community-filters"></div>
+            <div id="community-mods" class="community"><p class="muted small">Chargement…</p></div>
+          </div>
+        </div>
+
+        <!-- Contenu : captures, packs -->
+        <div class="tab-panel hidden" data-panel="content">
+          <div class="card">
+            <div class="card-head"><h3 class="card-title">Captures d’écran</h3><button class="btn btn-small" data-open-kind="screenshots">📂 Dossier</button></div>
+            <p class="muted small">Touche F2 en jeu. Cliquez sur une image pour l’ouvrir.</p>
+            <div class="shots" id="shots"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3 class="card-title">Packs de ressources</h3><button class="btn btn-small" data-open-kind="resourcepacks">📂 Dossier</button></div>
+            <p class="muted small">Déposez un pack (.zip) dans le dossier, puis activez-le en jeu (Options › Packs de ressources).</p>
+            <div class="packs" id="packs-resourcepacks"></div>
+          </div>
+          <div class="card" id="shaders-card">
+            <div class="card-head"><h3 class="card-title">Shaders</h3><button class="btn btn-small" data-open-kind="shaderpacks">📂 Dossier</button></div>
+            <p class="muted small" id="shaders-hint"></p>
+            <div class="packs" id="packs-shaderpacks"></div>
           </div>
         </div>
 
@@ -406,6 +448,15 @@
         <button class="btn" id="crash-console">Voir le rapport</button>
         <button class="btn" id="crash-close">Fermer</button>
       </div>
+    </div>
+  </div>
+
+  <div id="whatsnew-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="whatsnew-title">
+    <div class="modal">
+      <h2 id="whatsnew-title">✨ Quoi de neuf ?</h2>
+      <p class="muted small" id="whatsnew-version"></p>
+      <div class="whatsnew" id="whatsnew-notes"></div>
+      <div class="actions"><button class="btn btn-primary" id="whatsnew-close">C’est parti</button></div>
     </div>
   </div>
 

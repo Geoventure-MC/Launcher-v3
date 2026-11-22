@@ -13,6 +13,8 @@ pub mod secure;
 pub mod crash;
 pub mod gpu;
 pub mod gameopts;
+pub mod discord;
+pub mod media;
 
 use commands::AppState;
 use config::PanelClient;
@@ -128,6 +130,14 @@ pub fn run() {
             commands::detect_gpus,
             commands::restore_game_options,
             commands::open_launcher_logs,
+            commands::discord_presence,
+            commands::community_mods_installed,
+            commands::install_community_mod,
+            commands::uninstall_community_mod,
+            commands::list_content,
+            commands::delete_content,
+            commands::open_content,
+            commands::set_shader_pack,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du démarrage de Geoventure Launcher");

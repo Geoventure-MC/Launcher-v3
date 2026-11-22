@@ -160,6 +160,10 @@ pub fn build_panel_url(
             )));
         }
         pairs.append_pair("instance", inst);
+        // L'historique de fréquentation attend `?server=<id>`.
+        if clean_endpoint == "utils/servers-history" {
+            pairs.append_pair("server", inst);
+        }
     }
     if channel.eq_ignore_ascii_case("test") {
         pairs.append_pair("channel", "test");

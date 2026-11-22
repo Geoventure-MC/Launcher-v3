@@ -928,6 +928,8 @@ pub const PANEL_READ_ROUTES: &[&str] = &[
     "utils/wonder",
     "utils/changelog",
     "utils/launcher-content",
+    "utils/servers-history",
+    "api/centralcorp/community-mods",
 ];
 
 /// Lit une route JSON du panel (annonces, statut, succès, classements, saisons…).
@@ -1486,4 +1488,150 @@ pub async fn send_diagnostic(
         404 | 405 | 501 => serde_json::json!({ "sent": false, "unsupported": true, "status": status }),
         _ => return Err(LauncherError::HttpStatus { status, url: url.to_string() }),
     })
+}
+
+// ============================================================================
+// Lot 2 : Discord, mods communauté, captures, packs
+// ============================================================================
+
+fn game_dir_of(state: &AppState, data_directory: &str, instance: Option<&str>, channel: Option<&str>) -> PathBuf {
+    resolve_game_directory(&state.data_root_dir, data_directory, instance, "geoventure", channel.unwrap_or("stable"))
+}
+
+/// Met à jour la présence Discord (`null` l'efface).
+#[tauri::command]
+pub fn discord_presence(presence: Option<crate::discord::Presence>) {
+    crate::discord::set(presence);
+}
+
+#[tauri::command]
+pub fn community_mods_installed(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+) -> Vec<String> {
+    crate::media::installed_community(&game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref()))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn install_community_mod(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    url: String,
+    file_name: String,
+    hash: Option<String>,
+) -> LauncherResult<()> {
+    if state.game_running.load(Ordering::SeqCst) {
+        return Err(LauncherError::InvalidLaunchConfig("Fermez le jeu avant d’ajouter un mod.".into()));
+    }
+    let dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    Box::pin(crate::media::install_community(&dir, &url, &file_name, hash.as_deref().unwrap_or(""))).await?;
+    emit_log(&app, &state.logs, LogLevel::Info, "mods", format!("Mod communauté installé : {file_name}"));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn uninstall_community_mod(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    file_name: String,
+) -> LauncherResult<()> {
+    if state.game_running.load(Ordering::SeqCst) {
+        return Err(LauncherError::InvalidLaunchConfig("Fermez le jeu avant de retirer un mod.".into()));
+    }
+    let dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    crate::media::uninstall_community(&dir, &file_name)?;
+    emit_log(&app, &state.logs, LogLevel::Info, "mods", format!("Mod communauté retiré : {file_name}"));
+    Ok(())
+}
+
+/// Captures d'écran, packs de ressources ou de shaders (`kind`), le plus récent d'abord.
+/// Pour les captures, le dossier est ouvert au protocole `asset:` afin d'afficher les images.
+#[tauri::command]
+pub fn list_content(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    kind: String,
+) -> LauncherResult<serde_json::Value> {
+    let game_dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    let dir = crate::media::content_dir(&game_dir, &kind)
+        .ok_or_else(|| LauncherError::InvalidLaunchConfig(format!("Dossier inconnu : {kind}")))?;
+    if kind == "screenshots" && dir.is_dir() {
+        let _ = app.asset_protocol_scope().allow_directory(&dir, false);
+    }
+    let entries = crate::media::list_entries(&dir, &kind, 200);
+    let (enabled, pack) = crate::media::shader_state(&game_dir);
+    Ok(serde_json::json!({
+        "entries": entries,
+        "shader_loader": crate::media::has_shader_loader(&game_dir),
+        "shaders_enabled": enabled,
+        "shader_pack": pack,
+    }))
+}
+
+#[tauri::command]
+pub fn delete_content(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    kind: String,
+    name: String,
+) -> LauncherResult<()> {
+    let game_dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    let dir = crate::media::content_dir(&game_dir, &kind)
+        .ok_or_else(|| LauncherError::InvalidLaunchConfig(format!("Dossier inconnu : {kind}")))?;
+    crate::media::delete_entry(&dir, &name)
+}
+
+/// Ouvre le dossier (`name` absent) ou un fichier de ce dossier avec l'application du système.
+#[tauri::command]
+pub fn open_content(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    kind: String,
+    name: Option<String>,
+) -> LauncherResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let game_dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    let dir = crate::media::content_dir(&game_dir, &kind)
+        .ok_or_else(|| LauncherError::InvalidLaunchConfig(format!("Dossier inconnu : {kind}")))?;
+    std::fs::create_dir_all(&dir)?;
+    let target = match name.as_deref() {
+        Some(n) => dir.join(crate::media::safe_entry_name(n).ok_or_else(|| LauncherError::InvalidUrl(format!("Nom refusé : {n}")))?),
+        None => dir,
+    };
+    app.opener()
+        .open_path(target.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| LauncherError::Internal(e.to_string()))
+}
+
+/// Choisit le pack de shaders actif (Oculus), ou aucun.
+#[tauri::command]
+pub fn set_shader_pack(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    pack: Option<String>,
+) -> LauncherResult<()> {
+    if state.game_running.load(Ordering::SeqCst) {
+        return Err(LauncherError::InvalidLaunchConfig("Fermez le jeu avant de changer de shaders.".into()));
+    }
+    let game_dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    crate::media::set_shader(&game_dir, pack.as_deref())
 }

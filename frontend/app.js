@@ -31,9 +31,11 @@
   };
   const settings = Object.assign({
     instance: 'geoventure', channel: 'stable', profile: null, ramMin: null, ramMax: null, jvmArgs: null,
-    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false,
+    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false, discordRpc: true,
   }, store.get('nexus_rust_settings', {}));
   const saveSettings = () => store.set('nexus_rust_settings', settings);
+  // Dossier de jeu de l'instance choisie (arguments communs des commandes Rust).
+  const gameArgs = () => ({ dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel });
   const stats = Object.assign({ launch_count: 0, playtime_minutes: 0, instances: [], first_launch: null, unlocked: [] },
     store.get('nexus_rust_stats', {}));
   const saveStats = () => store.set('nexus_rust_stats', stats);
@@ -188,6 +190,7 @@
   $('btn-diag-nav').addEventListener('click', () => openDiagnostic());
 
   function showTab(tab) {
+    if (tab === 'content') renderContent();
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab));
     document.querySelectorAll('.nav-btn[data-page="settings"]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
@@ -298,7 +301,7 @@
     saveSettings();
     renderServers();
     renderStatus();
-    loadConfig().then(() => { loadNotifications(); loadLauncherContent(); });
+    loadConfig().then(() => { loadNotifications(); loadLauncherContent(); loadAffluence(); renderVideo(); updatePresence('launcher'); });
   }
 
   // ===========================================================================
@@ -758,6 +761,8 @@
       });
       const pid = await result;
       state.gameRunning = true;
+      state.presenceStart = Date.now();
+      updatePresence('game');
       $('dock-phase').textContent = '🎮 Ouverture du jeu… (le chargement des mods peut prendre une minute)';
       $('dock-pct').textContent = '';
       $('progress-fill').classList.remove('indeterminate');
@@ -797,6 +802,8 @@
 
   function onGameExit(code) {
     state.gameRunning = false;
+    state.presenceStart = Date.now();
+    updatePresence('launcher');
     updatePlayButton();
     if (state.gameStartedAt) {
       const minutes = Math.round((Date.now() - state.gameStartedAt) / 60000);
@@ -1092,7 +1099,9 @@
     $('after-launch').value = settings.afterLaunch;
     $('join-server').checked = !!settings.joinServer;
     $('reduce-motion').checked = !!settings.reduceMotion;
+    $('discord-rpc').checked = settings.discordRpc !== false;
     renderOptionalMods();
+    loadCommunity();
     try { const p = await invoke('get_panel_url'); $('panel-url').value = p.current === p.default ? '' : p.current; } catch (_) {}
     const sel = $('java-select');
     try {
@@ -1227,7 +1236,7 @@
     } catch (err) { $('diag-status').textContent = `Envoi impossible : ${errMsg(err)}. Utilisez « Copier ».`; }
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') ['diag-overlay', 'crash-overlay'].forEach((id) => $(id).classList.add('hidden'));
+    if (e.key === 'Escape') ['diag-overlay', 'crash-overlay', 'whatsnew-overlay'].forEach((id) => $(id).classList.add('hidden'));
   });
 
   // ===========================================================================
@@ -1241,7 +1250,11 @@
   async function checkUpdate(auto) {
     try {
       const info = await invoke('check_launcher_update');
-      if (info.available) { if (!auto) $('update-status').textContent = `Version ${info.version} disponible.`; return installUpdate(info.version); }
+      if (info.available) {
+        if (!auto) $('update-status').textContent = `Version ${info.version} disponible.`;
+        store.set('nexus_rust_whatsnew', { version: info.version, notes: info.notes || '' });
+        return installUpdate(info.version);
+      }
       if (!auto) $('update-status').textContent = `Vous avez la dernière version (${info.current}).`;
     } catch (err) {
       uiLog('warn', `Mise à jour non vérifiée : ${errMsg(err)}`);
@@ -1250,6 +1263,216 @@
     return null;
   }
   $('btn-check-update').addEventListener('click', () => checkUpdate(false));
+
+  // ===========================================================================
+  // Discord Rich Presence (réglages rpc_* du panel)
+  // ===========================================================================
+  state.presenceStart = Date.now();
+  function updatePresence(mode) {
+    const c = state.config;
+    if (settings.discordRpc === false || !c || !c.rpc_activation || !c.rpc_id) {
+      invoke('discord_presence', { presence: null }).catch(() => {});
+      return;
+    }
+    const srv = currentServer() || {};
+    const name = srv.name || 'Geoventure';
+    const buttons = [[c.rpc_button1, c.rpc_button1_url], [c.rpc_button2, c.rpc_button2_url]]
+      .filter(([l, u]) => l && safeHttps(u)).map(([label, url]) => ({ label: String(label), url: safeHttps(url) }));
+    const presence = {
+      client_id: String(c.rpc_id),
+      details: mode === 'game' ? `En jeu sur ${name}` : 'Dans le launcher Geoventure',
+      state: mode === 'game' ? (settings.channel === 'test' ? 'Canal de test' : (srv.description || 'Survie moddée')) : String(c.rpc_state || 'Prépare son aventure'),
+      large_image: String(c.rpc_large_image || ''), large_text: String(c.rpc_large_text || 'Geoventure'),
+      small_image: String(c.rpc_small_image || ''), small_text: mode === 'game' ? 'En jeu' : String(c.rpc_small_text || 'Geoventure'),
+      buttons, start_ms: state.presenceStart,
+    };
+    invoke('discord_presence', { presence }).catch(() => {});
+  }
+  $('discord-rpc').addEventListener('change', () => {
+    settings.discordRpc = $('discord-rpc').checked;
+    saveSettings();
+    updatePresence(state.gameRunning ? 'game' : 'launcher');
+  });
+
+  // ===========================================================================
+  // Affluence (48 h) et vidéo de la communauté
+  // ===========================================================================
+  async function loadAffluence() {
+    const card = $('affluence-card');
+    try {
+      const data = await invoke('panel_get', { endpoint: 'utils/servers-history', instance: settings.instance, channel: settings.channel });
+      const points = Array.isArray(data && data.points) ? data.points.slice(-48) : [];
+      if (!points.length) { card.classList.add('hidden'); return; }
+      const max = Math.max(1, ...points.map((p) => Number(p.players) || 0));
+      $('affluence-bars').replaceChildren(...points.map((p) => {
+        const n = Math.max(0, Number(p.players) || 0);
+        const at = new Date(Number(p.t));
+        return el('div', { class: 'affluence-bar', style: { height: `${Math.max(6, Math.round((n / max) * 100))}%` },
+          title: `${Number.isNaN(at.getTime()) ? '' : `${at.getHours()} h — `}${n} joueur${n > 1 ? 's' : ''}` });
+      }));
+      const peaks = (Array.isArray(data.peakHours) ? data.peakHours : []).map(Number).filter((h) => h >= 0 && h < 24);
+      $('affluence-peak').textContent = peaks.length ? `Heures de pointe : ${peaks.map((h) => `${h} h`).join(', ')}` : '';
+      card.classList.remove('hidden');
+    } catch (_) { card.classList.add('hidden'); }
+  }
+
+  function renderVideo() {
+    const c = state.config || {};
+    const id = String(c.video_url || '');
+    const card = $('video-card');
+    if (!c.video_activate || !/^[A-Za-z0-9_-]{11}$/.test(id)) { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    const thumb = $('video-thumb');
+    thumb.replaceChildren(el('img', { src: `https://img.youtube.com/vi/${id}/hqdefault.jpg`, alt: '' }), el('span', { class: 'video-play', 'aria-hidden': 'true', text: '▶' }));
+    thumb.onclick = () => thumb.replaceChildren(el('iframe', {
+      src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1`, title: 'Vidéo de la communauté',
+      allow: 'autoplay; encrypted-media; picture-in-picture', allowfullscreen: '',
+    }));
+    $('video-open').onclick = () => openUrl(`https://www.youtube.com/watch?v=${id}`);
+  }
+
+  // ===========================================================================
+  // Mods de la communauté
+  // ===========================================================================
+  const community = { mods: [], installed: new Set(), category: 'all', term: '' };
+  function modFileName(mod) {
+    let fromUrl = '';
+    try { fromUrl = decodeURIComponent(new URL(String(mod.url)).pathname.split('/').pop() || ''); } catch (_) {}
+    const n = String(mod.filename || fromUrl || '').trim();
+    return /^[^/\\\0]+\.jar$/i.test(n) && !n.includes('..') ? n : '';
+  }
+  async function loadCommunity() {
+    const box = $('community-mods');
+    box.replaceChildren(el('p', { class: 'muted small', text: 'Chargement…' }));
+    let mods = null;
+    for (const endpoint of ['utils/community-mods', 'api/centralcorp/community-mods']) {
+      try { mods = await invoke('panel_get', { endpoint, instance: settings.instance, channel: settings.channel }); break; } catch (_) {}
+    }
+    if (!Array.isArray(mods)) { box.replaceChildren(el('p', { class: 'muted small', text: 'Liste des mods communauté injoignable pour le moment.' })); return; }
+    community.mods = mods;
+    community.installed = new Set(await invoke('community_mods_installed', gameArgs()).catch(() => []));
+    const cats = [...new Set(mods.map((m) => String(m.category || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    $('community-filters').replaceChildren(...['all', ...cats].map((c) => {
+      const b = el('button', { class: `chip-btn${c === community.category ? ' active' : ''}`, text: c === 'all' ? 'Tous' : c });
+      b.addEventListener('click', () => { community.category = c; loadCommunityRender(); document.querySelectorAll('#community-filters .chip-btn').forEach((x) => x.classList.toggle('active', x === b)); });
+      return b;
+    }));
+    loadCommunityRender();
+  }
+  function loadCommunityRender() {
+    const term = community.term.toLowerCase();
+    const list = community.mods.filter((m) => (community.category === 'all' || String(m.category || '').trim() === community.category)
+      && (!term || `${m.name || ''} ${m.description || ''} ${m.author || ''}`.toLowerCase().includes(term)));
+    if (!list.length) { $('community-mods').replaceChildren(el('p', { class: 'muted small', text: community.mods.length ? 'Aucun mod ne correspond.' : 'Aucun mod communauté pour le moment.' })); return; }
+    $('community-mods').replaceChildren(...list.map((m) => {
+      const file = modFileName(m);
+      const url = safeHttps(m.url);
+      const installed = !!file && community.installed.has(file);
+      const btn = el('button', { class: `btn btn-small${installed ? '' : ' btn-primary'}`, text: installed ? 'Retirer' : 'Installer' });
+      btn.disabled = !file || !url;
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+          if (community.installed.has(file)) {
+            await invoke('uninstall_community_mod', { ...gameArgs(), fileName: file });
+            community.installed.delete(file);
+            toast(`${m.name} retiré.`);
+          } else {
+            await invoke('install_community_mod', { ...gameArgs(), url, fileName: file, hash: String(m.sha256 || m.sha1 || m.hash || '') || null });
+            community.installed.add(file);
+            toast(`${m.name} installé : il sera chargé au prochain lancement.`);
+          }
+        } catch (err) { toast(`${m.name} : ${errMsg(err)}`); }
+        loadCommunityRender();
+      });
+      const meta = [m.author, m.version ? `v${m.version}` : '', m.category].filter(Boolean).join(' · ');
+      const icon = safeHttps(m.icon);
+      const page = safeHttps(m.page || m.link || m.website);
+      return el('div', { class: `cmod${installed ? ' installed' : ''}` }, [
+        el('img', { src: icon || 'assets/img/icon.png', alt: '', loading: 'lazy', onerror: (e) => { e.target.onerror = null; e.target.src = 'assets/img/icon.png'; } }),
+        el('div', { class: 'cmod-body' }, [
+          el('strong', { text: String(m.name || file || 'Mod') }),
+          meta ? el('span', { class: 'muted small', text: meta }) : '',
+          el('p', { text: String(m.description || '') }),
+          el('div', { class: 'cmod-actions' }, [btn, page ? (() => { const b = el('button', { class: 'btn btn-small', text: 'Page du mod' }); b.addEventListener('click', () => openUrl(page)); return b; })() : '']),
+        ]),
+      ]);
+    }));
+  }
+  $('community-search').addEventListener('input', () => { community.term = $('community-search').value.trim(); loadCommunityRender(); });
+
+  // ===========================================================================
+  // Contenu : captures d'écran, packs de ressources, shaders
+  // ===========================================================================
+  const assetUrl = (p) => (T.core && T.core.convertFileSrc ? T.core.convertFileSrc(p) : '');
+  function confirmButton(label, onConfirm) {
+    const b = el('button', { class: 'btn btn-small', text: label });
+    let armed = false;
+    b.addEventListener('click', async () => {
+      if (!armed) { armed = true; b.textContent = 'Confirmer ?'; b.classList.add('btn-danger'); setTimeout(() => { armed = false; b.textContent = label; b.classList.remove('btn-danger'); }, 4000); return; }
+      await onConfirm();
+    });
+    return b;
+  }
+  const sizeText = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} Mo` : `${Math.max(1, Math.round(n / 1024))} Ko`);
+  async function renderContent() {
+    const shots = await invoke('list_content', { ...gameArgs(), kind: 'screenshots' }).catch(() => null);
+    const sEntries = shots ? shots.entries.slice(0, 60) : [];
+    $('shots').replaceChildren(...(sEntries.length ? sEntries.map((e) => {
+      const b = el('button', { class: 'shot', title: e.name }, [el('img', { src: assetUrl(e.path), alt: '', loading: 'lazy' }), el('span', { text: new Date(e.modified_ms).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) })]);
+      b.addEventListener('click', () => invoke('open_content', { ...gameArgs(), kind: 'screenshots', name: e.name }).catch((err) => toast(errMsg(err))));
+      return b;
+    }) : [el('p', { class: 'muted small', text: 'Aucune capture pour le moment.' })]));
+
+    const rp = await invoke('list_content', { ...gameArgs(), kind: 'resourcepacks' }).catch(() => null);
+    renderPacks('resourcepacks', rp ? rp.entries : [], null);
+    const sp = await invoke('list_content', { ...gameArgs(), kind: 'shaderpacks' }).catch(() => null);
+    const loader = !!(sp && sp.shader_loader);
+    $('shaders-hint').textContent = loader
+      ? 'Choisissez un pack de shaders. Les shaders demandent une bonne carte graphique ; en cas de lenteur, choisissez « Aucun ».'
+      : 'Les shaders demandent le mod Oculus : installez « Oculus » dans Mods › Mods de la communauté, puis revenez ici.';
+    renderPacks('shaderpacks', sp ? sp.entries : [], loader ? { enabled: sp.shaders_enabled, pack: sp.shader_pack } : null);
+  }
+  function renderPacks(kind, entries, shader) {
+    const box = $(`packs-${kind}`);
+    const rows = entries.map((e) => {
+      const active = shader && shader.enabled && shader.pack === e.name;
+      const actions = [];
+      if (shader) {
+        const use = el('button', { class: `btn btn-small${active ? ' btn-primary' : ''}`, text: active ? 'Actif' : 'Activer' });
+        use.disabled = active;
+        use.addEventListener('click', () => invoke('set_shader_pack', { ...gameArgs(), pack: e.name }).then(renderContent).catch((err) => toast(errMsg(err))));
+        actions.push(use);
+      }
+      actions.push(confirmButton('Supprimer', () => invoke('delete_content', { ...gameArgs(), kind, name: e.name }).then(renderContent).catch((err) => toast(errMsg(err)))));
+      return el('div', { class: `pack${active ? ' active' : ''}` }, [el('span', { text: e.name, title: e.name }), el('small', { class: 'muted', text: e.is_dir ? 'dossier' : sizeText(e.size) }), ...actions]);
+    });
+    if (shader) {
+      const none = el('button', { class: `btn btn-small${shader.enabled ? '' : ' btn-primary'}`, text: shader.enabled ? 'Désactiver les shaders' : 'Shaders désactivés' });
+      none.disabled = !shader.enabled;
+      none.addEventListener('click', () => invoke('set_shader_pack', { ...gameArgs(), pack: null }).then(renderContent).catch((err) => toast(errMsg(err))));
+      rows.unshift(el('div', { class: 'pack' }, [el('span', { text: 'Aucun' }), none]));
+    }
+    box.replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted small', text: 'Dossier vide.' })]));
+  }
+  document.querySelectorAll('[data-open-kind]').forEach((b) => b.addEventListener('click', () => invoke('open_content', { ...gameArgs(), kind: b.dataset.openKind, name: null }).catch((err) => toast(errMsg(err)))));
+
+  // ===========================================================================
+  // Quoi de neuf (notes de la version installée par la mise à jour automatique)
+  // ===========================================================================
+  async function showWhatsNew() {
+    const pending = store.get('nexus_rust_whatsnew', null);
+    if (!pending || !T.app) return;
+    let current = '';
+    try { current = await T.app.getVersion(); } catch (_) { return; }
+    if (pending.version !== current) return;
+    store.set('nexus_rust_whatsnew', null);
+    $('whatsnew-version').textContent = `Version ${current}`;
+    $('whatsnew-notes').textContent = String(pending.notes || 'Corrections et améliorations.').replace(/[#*`]/g, '').trim();
+    $('whatsnew-overlay').classList.remove('hidden');
+  }
+  $('whatsnew-close').addEventListener('click', () => $('whatsnew-overlay').classList.add('hidden'));
 
   // ===========================================================================
   // Démarrage
@@ -1287,6 +1510,7 @@
     $('preload').classList.add('done');
 
     loadStatuses(); loadNotifications(); loadGameEvents(); loadAchievements(); loadNews(); loadLauncherContent();
+    loadAffluence(); renderVideo(); updatePresence('launcher'); showWhatsNew();
     checkUpdate(true);
     setInterval(renderGameEvents, 1000);
     setInterval(loadStatuses, 60000);
