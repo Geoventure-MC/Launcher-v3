@@ -203,7 +203,8 @@ Cause : dans `minecraft-java-core-azbetter` (4.1.4), l'événement `error` du pa
 
 ## Fenêtre de chargement de Forge : journal de contrôle (2026-10-21)
 
-`utils/forgeconfig.js applyForgeWindowSettings()` renvoie `{file, ok, value}` après RELECTURE de `config/fml.toml` ; `home.js` écrit dans `launcher.log` la ligne `fml.toml <chemin> : earlyWindowControl=false` (ou « NON appliqué »). Si le joueur voit encore le logo Mojang rouge au lancement : lire cette ligne, puis `logs/latest.log` du jeu (`ImmediateWindowProvider not loading because splash screen is disabled` = appliqué). Cause probable sinon : launcher plus ancien que 1.5.27.
+`utils/forgeconfig.js applyForgeWindowSettings()` renvoie `{file, ok, value}` après RELECTURE de `config/fml.toml` ; `home.js` écrit dans `launcher.log` la ligne `fml.toml <chemin> : earlyWindowControl=true` (ou « NON appliqué »).
+**Depuis la v1.11.13 (2026-11-22) la fenêtre de chargement de Forge est RÉACTIVÉE** (`earlyWindowControl = true`) : désactivée, rien ne s'affichait entre le démarrage de Java et la fenêtre du jeu (12 s sur un PC rapide, plusieurs minutes sur une petite config avec le modpack GeoNTM) et, avec le réglage par défaut « Fermer le launcher », le launcher se cachait dès le démarrage de Java : les joueurs « ne voyaient rien ». Désormais `home.js handleLaunchData()` ne cache le launcher qu'à la première ligne prouvant qu'une fenêtre est à l'écran (`GAME_WINDOW_RE` : `[EARLYDISPLAY]: Requested GL version|GL info`, `Backend library: LWJGL`, `Setting user:`) ; avant, il affiche « Ouverture du jeu… » (`game_window_wait`) ; 3 min sans fenêtre → launcher réaffiché avec `game_window_slow` (pistes + Diagnostic). `launcher.log` note « fenêtre du jeu ouverte N après le démarrage de Java ».
 
 ## Sélecteur de canal d'instance Stable / Test lié aux grades Azuriom & branche `test` (2026-10-23)
 

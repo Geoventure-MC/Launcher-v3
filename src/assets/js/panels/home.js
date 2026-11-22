@@ -15,6 +15,10 @@ import { collectCrashReport, parseGameStartSeconds, formatDuration, slowStartAdv
 import { validatePanel } from '../utils/schema-validator.js';
 import { getGameDirectory, getGameDirectoryFor } from '../utils/gamedir.js';
 import { applyForgeWindowSettings } from '../utils/forgeconfig.js';
+
+// Lignes du journal qui prouvent qu'une fenêtre du jeu est à l'écran : fenêtre de chargement de
+// Forge (EARLYDISPLAY) ou fenêtre de Minecraft (« Backend library », « Setting user »).
+const GAME_WINDOW_RE = /\[EARLYDISPLAY\/?\]: (Requested GL version|GL info)|Backend library: LWJGL|Setting user:/;
 import { userKeepList } from '../utils/userdata.js';
 import { getInstallState, invalidateInstallState } from '../utils/installstate.js';
 import { withInstance, getSelectedChannel, setSelectedChannel, canAccessChannel, getChannelRoles, getAccountRoleName } from '../utils/instance.js';
@@ -564,6 +568,9 @@ class Home {
             info.innerHTML = t('patch_in_progress') + (this.patchTask ? ` <span class="patch-task">(${String(this.patchTask).replace(/[<>&]/g, '')})</span>` : '');
             if (patch) this.appendLog(patch);
         });
+        clearTimeout(this._gameWindowTimer);
+        this._gameWindowTimer = null;
+        this._gameWindowShown = false;
         launch.on('data', e => this.handleLaunchData(e, info, progressBar, playBtn, launcherSettings));
         launch.on('close', code => this.handleLaunchClose(code, info, progressBar, playBtn, launcherSettings));
         launch.on('error', err => {
@@ -821,12 +828,31 @@ class Home {
             this._pillProgressEnd();
         }
         new logger('Minecraft', '#36b030');
-        if (launcherSettings.launcher.close === 'close-launcher') ipcRenderer.send("main-window-hide");
         ipcRenderer.send('main-window-progress-reset');
         progressBar.style.display = "none";
-        info.innerHTML = t('starting');
         this.appendLog(String(e));
         this._noteJavaStarted();
+        // Le launcher ne se cache plus dès que Java démarre : il reste affiché (« Ouverture du jeu… »)
+        // jusqu'à ce qu'une fenêtre du jeu soit vraiment à l'écran. Avant, rien n'était visible
+        // pendant tout le chargement des mods et les joueurs croyaient que le jeu ne se lançait pas.
+        if (!this._gameWindowShown && GAME_WINDOW_RE.test(String(e))) {
+            this._gameWindowShown = true;
+            clearTimeout(this._gameWindowTimer);
+            this.writeLauncherLog(`fenêtre du jeu ouverte ${this._launchState && this._launchState.javaStartAt ? formatDuration(Date.now() - this._launchState.javaStartAt) : ''} après le démarrage de Java`);
+            info.innerHTML = t('starting');
+            if (launcherSettings.launcher.close === 'close-launcher') ipcRenderer.send("main-window-hide");
+        } else if (!this._gameWindowShown) {
+            info.innerHTML = t('game_window_wait') || 'Ouverture du jeu… (le chargement des mods peut prendre une minute)';
+            if (!this._gameWindowTimer) {
+                // Garde-fou : 3 min sans fenêtre de jeu → message clair, launcher au premier plan.
+                this._gameWindowTimer = setTimeout(() => {
+                    if (this._gameWindowShown || !this._launching) return;
+                    this.writeLauncherLog('aucune fenêtre de jeu après 3 min');
+                    info.innerHTML = t('game_window_slow') || 'Le jeu met longtemps à s’ouvrir. Patientez encore un peu ; s’il n’apparaît pas, ouvrez Réglages › Avancé › Diagnostic et envoyez le rapport à l’équipe.';
+                    ipcRenderer.send('main-window-show');
+                }, 180000);
+            }
+        }
         const startSeconds = parseGameStartSeconds(String(e));
         if (startSeconds !== null) this._noteGameStartSeconds(startSeconds);
 
@@ -928,6 +954,9 @@ class Home {
 
     async handleLaunchClose(code, info, progressBar, playBtn, launcherSettings) {
         this._launching = false;
+        clearTimeout(this._gameWindowTimer);
+        this._gameWindowTimer = null;
+        this._gameWindowShown = false;
         this._installStateRefreshed = false;
         this._pillProgressEnd();
         try {

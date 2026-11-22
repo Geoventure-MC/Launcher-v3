@@ -34,6 +34,8 @@
     "launch_error": "Launch failed: unable to reach the servers. Check your connection, firewall or antivirus, then relaunch — the download will resume where it left off.",
     "online": "Online",
     "patch_in_progress": "Patch in progress...",
+    "game_window_wait": "Opening the game… (loading the mods can take a minute)",
+    "game_window_slow": "The game is taking a long time to open. Wait a little longer; if it does not appear, open Settings › Advanced › Diagnostic and send the report to the team.",
     "starting": "Starting...",
     "download": "Download",
     "server_closed": "Closed",

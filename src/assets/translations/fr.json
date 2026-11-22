@@ -34,6 +34,8 @@
     "launch_error": "Erreur de lancement : impossible de contacter les serveurs. Vérifiez votre connexion, pare-feu ou antivirus, puis relancez — le téléchargement reprendra où il s'était arrêté.",
     "online": "En ligne",
     "patch_in_progress": "Patch en cours...",
+    "game_window_wait": "Ouverture du jeu… (le chargement des mods peut prendre une minute)",
+    "game_window_slow": "Le jeu met longtemps à s’ouvrir. Patientez encore un peu ; s’il n’apparaît pas, ouvrez Réglages › Avancé › Diagnostic et envoyez le rapport à l’équipe.",
     "starting": "Démarrage en cours...",
     "download": "Téléchargement",
     "server_closed": "Fermé",
