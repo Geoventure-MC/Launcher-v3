@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Geoventure Launcher</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Fond du serveur sélectionné (zoom lent) + halos animés -->
+  <div class="backdrop" aria-hidden="true">
+    <div id="backdrop-img" class="backdrop-img"></div>
+    <div class="backdrop-shade"></div>
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+  </div>
+
+  <!-- Écran de chargement -->
+  <div id="preload" class="preload" aria-live="polite">
+    <div class="preload-ring"><img src="assets/img/icon.png" alt="" /></div>
+    <div class="preload-text" id="preload-text">Chargement du launcher…</div>
+  </div>
+
+  <!-- Mise à jour du launcher -->
+  <div id="update-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="update-title">
+    <div class="modal">
+      <h2 id="update-title">Mise à jour du launcher</h2>
+      <p id="update-text" class="muted">Téléchargement…</p>
+      <div class="bar"><div id="update-fill" class="bar-fill"></div></div>
+    </div>
+  </div>
+
+  <!-- Connexion Azuriom -->
+  <div id="login-screen" class="login-screen hidden">
+    <form id="az-login-form" class="login-card">
+      <img class="login-logo" src="assets/img/icon.png" alt="" />
+      <h1>Bienvenue sur <span class="accent">Geoventure</span></h1>
+      <p class="muted">Connectez-vous avec votre compte du site <strong id="login-site">geoventure.fr</strong>.</p>
+      <label class="field">
+        <span>E-mail ou pseudo</span>
+        <input id="az-email" type="text" autocomplete="username" required />
+      </label>
+      <label class="field">
+        <span>Mot de passe</span>
+        <input id="az-password" type="password" autocomplete="current-password" required />
+      </label>
+      <label id="az-2fa-wrap" class="field hidden">
+        <span>Code de double authentification</span>
+        <input id="az-2fa" type="text" inputmode="numeric" maxlength="10" autocomplete="one-time-code" />
+      </label>
+      <button type="submit" id="btn-login" class="btn btn-primary btn-block">Se connecter</button>
+      <p id="az-status" class="form-status" role="status"></p>
+      <div class="login-links">
+        <button type="button" class="link" id="link-register">Créer un compte</button>
+        <button type="button" class="link" id="link-forgot">Mot de passe oublié ?</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="shell">
+    <!-- Barre latérale -->
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <button class="player-head" id="player-head" title="Mon profil" aria-label="Mon profil">
+          <img id="az-avatar" alt="" />
+        </button>
+        <div class="player-role" id="az-role"></div>
+      </div>
+
+      <div class="server-list" id="server-pills" role="tablist" aria-label="Serveurs"></div>
+
+      <div class="channel-list" id="channel-switch" role="radiogroup" aria-label="Canal">
+        <button data-channel="stable" class="channel-pill active" role="radio" aria-checked="true" title="Stable">S</button>
+        <button data-channel="test" class="channel-pill" role="radio" aria-checked="false" title="Test">T</button>
+      </div>
+
+      <div class="sidebar-play">
+        <button id="btn-play" class="play-btn" disabled aria-label="Jouer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>
+        </button>
+        <span class="play-label" id="play-label">Jouer</span>
+        <button class="kill-btn hidden" id="btn-kill" title="Fermer le jeu" aria-label="Fermer le jeu">✕ Fermer</button>
+      </div>
+
+      <nav class="sidebar-bottom" aria-label="Navigation">
+        <button class="nav-btn active" data-page="home" title="Accueil" aria-label="Accueil">
+          <svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></svg>
+        </button>
+        <button class="nav-btn" data-page="profile" title="Profil et succès" aria-label="Profil et succès">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 19.5c0-3.6 3.1-5.5 7-5.5s7 1.9 7 5.5"/></svg>
+        </button>
+        <button class="nav-btn" id="btn-perf" data-page="settings" data-tab="perf" title="Performances" aria-label="Performances">
+          <svg viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/></svg>
+        </button>
+        <button class="nav-btn" id="btn-diag-nav" title="Diagnostic" aria-label="Diagnostic">
+          <svg viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>
+        </button>
+        <button class="nav-btn" data-page="console" title="Console" aria-label="Console">
+          <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m7.5 10 3 2.5-3 2.5M12.5 15H16"/></svg>
+        </button>
+        <button class="nav-btn" data-page="settings" data-tab="game" title="Réglages" aria-label="Réglages">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </nav>
+    </aside>
+
+    <main class="content" id="content">
+      <!-- ================= ACCUEIL ================= -->
+      <section id="page-home" class="page">
+        <header class="topbar">
+          <div class="topbar-title">
+            <img id="server-logo" class="server-logo" alt="" />
+            <div>
+              <h1 id="server-name">Geoventure</h1>
+              <p id="splash" class="muted"></p>
+            </div>
+          </div>
+          <div class="topbar-right">
+            <span id="status-badge" class="badge">Connexion…</span>
+          </div>
+        </header>
+
+        <div id="notifications" class="notifications"></div>
+        <div id="alert-banner" class="alert-banner hidden"></div>
+        <div id="maintenance-box" class="maintenance hidden"></div>
+
+        <!-- Actualité -->
+        <article class="hero reveal" id="news-hero" tabindex="0" aria-roledescription="carrousel">
+          <div class="hero-bg" id="news-hero-bg"></div>
+          <div class="hero-shade"></div>
+          <div class="hero-body">
+            <span class="hero-badge" id="news-hero-badge">ACTUALITÉ</span>
+            <h2 class="hero-title" id="news-hero-title">Chargement de l’actualité…</h2>
+            <p class="hero-desc" id="news-hero-desc"></p>
+            <span class="hero-meta muted" id="news-hero-meta"></span>
+          </div>
+          <div class="hero-nav" id="news-hero-nav"></div>
+        </article>
+
+        <!-- Raccourcis -->
+        <section class="reveal">
+          <h3 class="section-title">Raccourcis</h3>
+          <div class="shortcuts" id="shortcuts"></div>
+        </section>
+
+        <div class="home-grid">
+          <section class="reveal">
+            <h3 class="section-title">À découvrir</h3>
+            <div class="discover" id="discover"></div>
+            <h3 class="section-title">Dernières actualités</h3>
+            <div class="news-list" id="news-list"></div>
+          </section>
+
+          <aside class="side-col">
+            <div class="card server-card reveal">
+              <div class="server-card-top">
+                <img id="server-img" class="server-img" alt="" />
+                <div class="server-card-text">
+                  <strong id="server-card-name">Geoventure</strong>
+                  <span id="server-card-desc" class="muted small"></span>
+                </div>
+                <span class="status-dot" id="status-dot"></span>
+              </div>
+              <div class="server-live">
+                <span class="chip" id="server-players">— joueurs</span>
+                <span class="chip" id="server-latency">-- ms</span>
+                <button class="icon-btn" id="btn-refresh-status" title="Actualiser le statut" aria-label="Actualiser le statut">↻</button>
+              </div>
+              <button class="btn btn-primary btn-block" id="btn-join">Rejoindre le serveur</button>
+              <p id="play-block-reason" class="muted small center"></p>
+            </div>
+
+            <div class="card reveal hidden" id="affluence-card">
+              <h3 class="card-title">Affluence <span class="muted small">48 h</span></h3>
+              <div class="affluence" id="affluence-bars" role="img" aria-label="Joueurs connectés heure par heure"></div>
+              <p class="muted small" id="affluence-peak"></p>
+            </div>
+
+            <div class="card reveal hidden" id="video-card">
+              <h3 class="card-title">Vidéo de la communauté</h3>
+              <button class="video-thumb" id="video-thumb" aria-label="Lire la vidéo"><img id="video-img" alt="" /><span class="video-play" aria-hidden="true">▶</span></button>
+              <button class="btn btn-small" id="video-open">Voir sur YouTube</button>
+            </div>
+
+            <div class="card reveal hidden" id="wonder-card">
+              <h3 class="card-title">🏛️ Merveille</h3>
+              <strong id="wonder-name"></strong>
+              <p class="muted small" id="wonder-info"></p>
+              <ol class="wonder-rank" id="wonder-rank"></ol>
+            </div>
+
+            <div class="card reveal" id="events-card">
+              <h3 class="card-title">Événements</h3>
+              <div id="game-events" class="events"><p class="muted small">Aucun événement pour le moment.</p></div>
+            </div>
+
+            <div class="card reveal">
+              <h3 class="card-title">Votre installation</h3>
+              <div class="kv"><span>Version</span><strong id="info-version">—</strong></div>
+              <div class="kv"><span>Java</span><strong id="info-java">Java 17 fourni</strong></div>
+              <div class="kv"><span>Mémoire</span><strong id="info-ram">—</strong></div>
+              <div class="kv"><span>Profil</span><strong id="info-profile">—</strong></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ================= PROFIL ================= -->
+      <section id="page-profile" class="page hidden">
+        <header class="page-head">
+          <div class="profile-id">
+            <img id="profile-avatar" class="profile-avatar" alt="" />
+            <div>
+              <h1 id="profile-name">—</h1>
+              <span class="role-chip" id="profile-role">—</span>
+            </div>
+          </div>
+          <div class="stats-row">
+            <div class="stat"><strong id="stat-launches">0</strong><span>lancements</span></div>
+            <div class="stat"><strong id="stat-playtime">0 h</strong><span>de jeu</span></div>
+            <div class="stat"><strong id="ach-score">0</strong><span>points de succès</span></div>
+            <div class="stat hidden" id="stat-money-wrap"><strong id="stat-money">0</strong><span>GeoCoins</span></div>
+          </div>
+        </header>
+        <div class="profile-grid">
+          <div class="card">
+            <h3 class="card-title">Succès</h3>
+            <div id="achievements" class="achievements"><p class="muted">Chargement…</p></div>
+          </div>
+          <div class="side-col">
+            <div class="card">
+              <h3 class="card-title">Classement <span class="live-dot" title="Mis à jour toutes les 30 s"></span></h3>
+              <ol id="leaderboard" class="leaderboard"><li class="muted">Chargement…</li></ol>
+            </div>
+            <div class="card">
+              <h3 class="card-title">Saison</h3>
+              <div id="season"><p class="muted">Chargement…</p></div>
+            </div>
+            <div class="card">
+              <h3 class="card-title">Factions</h3>
+              <table class="table"><thead><tr><th>Faction</th><th>Membres</th><th>Puissance</th></tr></thead>
+                <tbody id="factions"><tr><td colspan="3" class="muted">Chargement…</td></tr></tbody></table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= RÉGLAGES ================= -->
+      <section id="page-settings" class="page hidden">
+        <header class="page-head"><h1>Réglages</h1></header>
+        <div class="tabs" role="tablist">
+          <button class="tab" data-tab="perf" role="tab">⚡ Performances</button>
+          <button class="tab active" data-tab="game" role="tab">🎮 Jeu</button>
+          <button class="tab" data-tab="mods" role="tab">🧩 Mods</button>
+          <button class="tab" data-tab="content" role="tab">🖼️ Contenu</button>
+          <button class="tab" data-tab="advanced" role="tab">🛠️ Avancé</button>
+        </div>
+
+        <!-- Performances -->
+        <div class="tab-panel hidden" data-panel="perf">
+          <div class="card hw-card">
+            <div class="hw-grid">
+              <div class="hw"><span>Processeur</span><strong id="hw-cpu">—</strong></div>
+              <div class="hw"><span>Mémoire</span><strong id="hw-ram">—</strong></div>
+              <div class="hw"><span>Mémoire libre</span><strong id="hw-free">—</strong></div>
+              <div class="hw"><span>Système</span><strong id="hw-os">—</strong></div>
+              <div class="hw"><span>Carte graphique</span><strong id="hw-gpu">—</strong></div>
+            </div>
+            <div class="optimize">
+              <div>
+                <strong>Optimisation automatique</strong>
+                <p class="muted small" id="optimize-text">Le launcher choisit la mémoire et les réglages Java adaptés à votre PC.</p>
+              </div>
+              <button class="btn btn-primary" id="btn-optimize">⚡ Optimiser pour mon PC</button>
+            </div>
+            <p class="warn small hidden" id="perf-warning"></p>
+          </div>
+
+          <div class="profiles" id="profile-switch">
+            <button class="profile-card" data-profile="eco"><span class="pc-icon">🍃</span><strong>Économe</strong><span class="muted small">PC modeste, 8 Go ou moins</span><span class="pc-ram" data-ram="eco"></span></button>
+            <button class="profile-card" data-profile="balanced"><span class="pc-icon">⚖️</span><strong>Équilibré</strong><span class="muted small">La plupart des PC</span><span class="pc-ram" data-ram="balanced"></span></button>
+            <button class="profile-card" data-profile="performance"><span class="pc-icon">🚀</span><strong>Performant</strong><span class="muted small">16 Go et 6 cœurs ou plus</span><span class="pc-ram" data-ram="performance"></span></button>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">Mémoire allouée au jeu <span class="muted small" id="profile-hint"></span></h3>
+            <div class="ram-visual"><div class="ram-total"><div class="ram-used" id="ram-bar"></div></div><span class="muted small" id="ram-bar-text"></span></div>
+            <label class="slider">Minimum : <strong id="ram-min-val"></strong><input id="ram-min" type="range" min="1" max="16" step="1" /></label>
+            <label class="slider">Maximum : <strong id="ram-max-val"></strong><input id="ram-max" type="range" min="1" max="16" step="1" /></label>
+            <label class="toggle"><input type="checkbox" id="light-game" /><span>Avec le profil Économe, alléger aussi les réglages du jeu (distance de vue 8, ombres, nuages et particules réduits). Vos réglages sont gardés de côté.</span></label>
+            <button class="btn btn-small" id="btn-restore-options">Remettre mes réglages du jeu</button>
+            <label class="field"><span>Arguments Java (un par ligne)</span><textarea id="jvm-args" rows="4" spellcheck="false"></textarea></label>
+          </div>
+        </div>
+
+        <!-- Jeu -->
+        <div class="tab-panel" data-panel="game">
+          <div class="card">
+            <label class="field"><span>Résolution de la fenêtre</span>
+              <select id="resolution">
+                <option value="auto">Par défaut</option>
+                <option value="1280x720">1280 × 720</option>
+                <option value="1600x900">1600 × 900</option>
+                <option value="1920x1080">1920 × 1080</option>
+              </select>
+            </label>
+            <label class="field"><span>Pendant la partie</span>
+              <select id="after-launch">
+                <option value="keep">Garder le launcher ouvert</option>
+                <option value="hide">Cacher le launcher (réaffiché à la fermeture du jeu)</option>
+                <option value="close">Fermer le launcher</option>
+              </select>
+            </label>
+            <label class="toggle"><input type="checkbox" id="join-server" /><span>Se connecter directement au serveur au lancement</span></label>
+            <label class="toggle"><input type="checkbox" id="reduce-motion" /><span>Réduire les animations</span></label>
+            <label class="toggle"><input type="checkbox" id="desktop-notifs" /><span>Me prévenir par une notification (maintenance, événement, plantage) quand le launcher est réduit</span></label>
+            <label class="toggle"><input type="checkbox" id="telemetry" /><span>Envoyer des statistiques anonymes (lancements, plantages, durée de démarrage) pour aider l’équipe</span></label>
+            <label class="toggle"><input type="checkbox" id="discord-rpc" /><span>Afficher mon activité Geoventure sur Discord</span></label>
+            <label class="toggle" id="row-close-tray"><input type="checkbox" id="close-to-tray" /><span>Fermer la fenêtre range le launcher près de l’horloge (zone de notification)</span></label>
+            <label class="toggle"><input type="checkbox" id="autostart" /><span>Ouvrir le launcher au démarrage de l’ordinateur (réduit)</span></label>
+            <label class="field"><span>Langue / Language</span>
+              <select id="language">
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- Mods -->
+        <div class="tab-panel hidden" data-panel="mods">
+          <div class="card">
+            <h3 class="card-title">Mods optionnels</h3>
+            <div id="optional-mods" class="mods"><p class="muted small">Aucun mod optionnel.</p></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Mods de la communauté</h3>
+            <p class="muted small">Des mods conseillés par l’équipe, à ajouter si vous le souhaitez. Ils restent installés aux mises à jour du modpack.</p>
+            <div class="inline">
+              <input id="community-search" type="search" placeholder="Rechercher un mod…" aria-label="Rechercher un mod de la communauté" />
+            </div>
+            <div class="chips" id="community-filters"></div>
+            <div id="community-mods" class="community"><p class="muted small">Chargement…</p></div>
+          </div>
+        </div>
+
+        <!-- Contenu : captures, packs -->
+        <div class="tab-panel hidden" data-panel="content">
+          <div class="card">
+            <div class="card-head"><h3 class="card-title">Captures d’écran</h3><button class="btn btn-small" data-open-kind="screenshots">📂 Dossier</button></div>
+            <p class="muted small">Touche F2 en jeu. Cliquez sur une image pour l’ouvrir.</p>
+            <div class="shots" id="shots"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3 class="card-title">Packs de ressources</h3><button class="btn btn-small" data-open-kind="resourcepacks">📂 Dossier</button></div>
+            <p class="muted small">Déposez un pack (.zip) dans le dossier, puis activez-le en jeu (Options › Packs de ressources).</p>
+            <div class="packs" id="packs-resourcepacks"></div>
+          </div>
+          <div class="card" id="shaders-card">
+            <div class="card-head"><h3 class="card-title">Shaders</h3><button class="btn btn-small" data-open-kind="shaderpacks">📂 Dossier</button></div>
+            <p class="muted small" id="shaders-hint"></p>
+            <div class="packs" id="packs-shaderpacks"></div>
+          </div>
+        </div>
+
+        <!-- Avancé -->
+        <div class="tab-panel hidden" data-panel="advanced">
+          <div class="card">
+            <h3 class="card-title">Java</h3>
+            <label class="field"><span>Exécutable Java</span>
+              <select id="java-select"><option value="">Automatique (Java 17 fourni)</option></select>
+            </label>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Panel</h3>
+            <p class="muted small">Adresse du panel qui fournit la configuration, le modpack et les mods. Laissez vide pour l’adresse officielle.</p>
+            <div class="inline">
+              <input id="panel-url" type="url" placeholder="https://launcher.geoventure.fr/" spellcheck="false" />
+              <button class="btn" id="btn-panel-url">Tester et utiliser</button>
+            </div>
+            <p class="muted small" id="panel-url-status" role="status"></p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Maintenance</h3>
+            <div class="actions">
+              <button class="btn" id="btn-diagnostic">🩺 Diagnostic</button>
+              <button class="btn" id="btn-repair">🔧 Réparer l’installation</button>
+              <button class="btn" id="btn-open-dir">📂 Ouvrir le dossier du jeu</button>
+              <button class="btn" id="btn-check-update">⬆️ Chercher une mise à jour</button>
+            </div>
+            <p id="repair-status" class="muted small" role="status"></p>
+            <p id="update-status" class="muted small" role="status"></p>
+            <p class="muted small" id="launcher-version"></p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Compte</h3>
+            <button class="btn btn-danger" id="btn-logout">Se déconnecter</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CONSOLE ================= -->
+      <section id="page-console" class="page hidden">
+        <header class="page-head">
+          <h1>Console</h1>
+          <div class="seg" role="tablist" aria-label="Journal affiché" id="log-kinds">
+            <button class="seg-btn active" data-kind="live" role="tab" aria-selected="true">En direct</button>
+            <button class="seg-btn" data-kind="latest" role="tab" aria-selected="false">Journal du jeu</button>
+            <button class="seg-btn" data-kind="crash" role="tab" aria-selected="false">Dernier plantage</button>
+            <button class="seg-btn" data-kind="launcher" role="tab" aria-selected="false">launcher.log</button>
+          </div>
+          <div class="actions">
+            <button class="btn" id="btn-log-folder" title="Ouvrir le dossier des journaux">📂</button>
+            <button class="btn" id="btn-autoscroll" aria-pressed="true">Défilement auto</button>
+            <button class="btn" id="btn-copy-logs">Copier</button>
+            <button class="btn" id="btn-clear-logs">Effacer</button>
+            <button class="btn" id="btn-devtools" title="Outils de développement (F12)">F12</button>
+          </div>
+        </header>
+        <pre id="log-output" class="log-output"></pre>
+        <pre id="log-file" class="log-output hidden" tabindex="0"></pre>
+        <p class="muted small" id="log-file-path"></p>
+      </section>
+    </main>
+  </div>
+
+  <!-- Progression de l'installation / du lancement -->
+  <div class="dock hidden" id="dock" role="status" aria-live="polite">
+    <div class="dock-head">
+      <span class="dock-phase" id="dock-phase">Préparation…</span>
+      <span class="dock-pct" id="dock-pct"></span>
+    </div>
+    <div class="bar"><div class="bar-fill shimmer" id="progress-fill"></div></div>
+    <div class="dock-file muted small" id="progress-text"></div>
+  </div>
+
+  <!-- Diagnostic -->
+  <div id="diag-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="diag-title">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2 id="diag-title">🩺 Diagnostic</h2>
+        <button class="icon-btn" id="diag-close" aria-label="Fermer">✕</button>
+      </div>
+      <p class="muted small">Ce rapport aide l’équipe à comprendre un problème. Les mots de passe, jetons, e-mails et chemins personnels sont masqués. Rien n’est envoyé sans votre clic.</p>
+      <div class="diag-summary" id="diag-summary"></div>
+      <pre class="diag-report" id="diag-report">Analyse en cours…</pre>
+      <div class="actions">
+        <button class="btn" id="diag-copy">Copier</button>
+        <button class="btn" id="diag-save">Enregistrer</button>
+        <button class="btn btn-primary" id="diag-send">Envoyer à l’équipe</button>
+        <button class="btn" id="diag-rerun">Relancer l’analyse</button>
+      </div>
+      <p class="muted small" id="diag-status" role="status"></p>
+    </div>
+  </div>
+
+  <!-- Fermeture anormale du jeu -->
+  <div id="crash-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="crash-title">
+    <div class="modal">
+      <h2 id="crash-title">⚠️ Le jeu s’est fermé de façon inattendue</h2>
+      <p class="crash-cause hidden" id="crash-cause"></p>
+      <p class="muted" id="crash-text"></p>
+      <pre class="crash-excerpt hidden" id="crash-excerpt"></pre>
+      <div class="actions">
+        <button class="btn btn-primary" id="crash-diag">Lancer un diagnostic</button>
+        <button class="btn" id="crash-console">Voir le rapport</button>
+        <button class="btn" id="crash-close">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="whatsnew-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="whatsnew-title">
+    <div class="modal">
+      <h2 id="whatsnew-title">✨ Quoi de neuf ?</h2>
+      <p class="muted small" id="whatsnew-version"></p>
+      <div class="whatsnew" id="whatsnew-notes"></div>
+      <div class="actions"><button class="btn btn-primary" id="whatsnew-close">C’est parti</button></div>
+    </div>
+  </div>
+
+  <div id="consent" class="consent hidden" role="dialog" aria-labelledby="consent-title">
+    <strong id="consent-title">Aider à améliorer le launcher ?</strong>
+    <p class="muted small">Le launcher peut envoyer des statistiques anonymes : lancements, plantages et durée de démarrage. Jamais votre mot de passe, votre e-mail ni vos fichiers. Modifiable à tout moment dans Réglages › Jeu.</p>
+    <div class="actions"><button class="btn btn-primary btn-small" id="consent-yes">D’accord</button><button class="btn btn-small" id="consent-no">Non merci</button></div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

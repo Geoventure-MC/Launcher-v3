@@ -1,0 +1,197 @@
+# Launcher Geoventure (Rust / Tauri v2) : à chaque push sur `master`, tests, build Windows, Linux
+# et macOS, puis version GitHub `rust-v2.0.<n>`.
+#
+# La version GitHub « Latest » reste la dernière version de l'ancien launcher (Electron) : celle-ci
+# installe le nouveau launcher et l'ouvre. Les anciens launchers pas encore à jour la trouvent donc
+# toujours (electron-updater lit « Latest »). Les versions Rust sont créées avec --latest=false.
+#
+# Mise à jour automatique : le launcher lit `latest.json` dans la release fixe `rust-latest`,
+# recopié ici après chaque build. Ce fichier et les installateurs sont signés avec la clé
+# du secret TAURI_SIGNING_PRIVATE_KEY (clé publique dans src-tauri/tauri.conf.json).
+name: Launcher Rust — build et pré-version
+
+on:
+  push:
+    branches: [master]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rust-release
+  cancel-in-progress: false
+
+env:
+  VERSION: 2.0.${{ github.run_number }}
+  TAG: rust-v2.0.${{ github.run_number }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances système (WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Tests de l'interface (Playwright, faux pont Tauri)
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:ui
+
+  notes:
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.notes.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Notes de version (titres des commits depuis la pré-version précédente)
+        id: notes
+        run: |
+          prev=$(git tag --list 'rust-v*' --sort=-version:refname | head -n 1)
+          range=${prev:+$prev..}HEAD
+          {
+            echo "body<<FIN_DES_NOTES"
+            git log --no-merges --format='- %s' $range -- . ':(exclude)*.md' | head -n 40
+            echo "FIN_DES_NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+  # La version est créée ici, avant les builds, pour qu'elle ne devienne jamais « Latest ».
+  release:
+    needs: [test, notes]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      NOTES: ${{ needs.notes.outputs.body }}
+    steps:
+      - name: Créer la version (jamais « Latest »)
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then exit 0; fi
+          printf 'Nouveautés :\n%s\n\nInstaller le launcher Geoventure : Windows (setup.exe), macOS (.dmg), Linux (.AppImage ou .deb). Il se met ensuite à jour tout seul.\n' "$NOTES" > notes.md
+          gh release create "$TAG" --repo "$REPO" --target "$GITHUB_SHA" \
+            --title "Geoventure Launcher v$VERSION" --notes-file notes.md --latest=false
+
+  build:
+    needs: [test, notes, release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ""
+          - os: ubuntu-22.04
+            args: ""
+          # Une seule app pour les Mac Intel et Apple Silicon.
+          - os: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clé de signature présente ?
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY absent (Settings → Secrets and variables → Actions). Sans lui, les mises à jour ne peuvent pas être signées."
+            exit 1
+          fi
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Numéro de version
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            c.version = process.env.VERSION;
+            fs.writeFileSync(p, JSON.stringify(c, null, 2));
+          "
+          # perl plutôt que sed : la syntaxe « 0,/motif/ » de GNU sed n'existe pas sur macOS.
+          perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' src-tauri/Cargo.toml
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: npx tauri
+          args: ${{ matrix.args }}
+          tagName: ${{ env.TAG }}
+          releaseName: "Geoventure Launcher v${{ env.VERSION }}"
+          # Ces notes sont aussi celles de « Quoi de neuf ? » dans le launcher après sa mise à jour.
+          releaseBody: |
+            Nouveautés :
+            ${{ needs.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+  publish-updater:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Recopier latest.json dans la release rust-latest
+        run: |
+          gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir out
+          if ! gh release view rust-latest --repo "$REPO" >/dev/null 2>&1; then
+            gh release create rust-latest --repo "$REPO" --prerelease --target "$GITHUB_SHA" \
+              --title "Launcher Rust : canal de mise à jour" \
+              --notes "Fichier lu par le launcher Rust pour se mettre à jour. Ne pas supprimer."
+          fi
+          gh release upload rust-latest out/latest.json --repo "$REPO" --clobber
+          echo "Mise à jour publiée : $(jq -r .version out/latest.json)"
+
+  # Annonce facultative sur Discord : seulement si le secret DISCORD_RELEASE_WEBHOOK existe
+  # (Paramètres du salon → Intégrations → Webhooks). Sans lui, rien n'est envoyé.
+  announce:
+    needs: [publish-updater, notes]
+    runs-on: ubuntu-latest
+    env:
+      WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+      NOTES: ${{ needs.notes.outputs.body }}
+      URL: https://github.com/${{ github.repository }}/releases/tag/rust-v2.0.${{ github.run_number }}
+    steps:
+      - name: Annonce Discord
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "Pas de secret DISCORD_RELEASE_WEBHOOK : pas d'annonce."
+            exit 0
+          fi
+          text=$(printf '🚀 **Geoventure Launcher v%s**\n%s\n\nTélécharger : %s\nDéjà installé ? Il se met à jour tout seul.' \
+            "$VERSION" "$(printf '%s' "$NOTES" | head -n 15)" "$URL")
+          jq -n --arg c "$text" '{content: ($c | .[0:1900]), allowed_mentions: {parse: []}}' \
+            | curl -fsS -H 'Content-Type: application/json' -d @- "$WEBHOOK"
