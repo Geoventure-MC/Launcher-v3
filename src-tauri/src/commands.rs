@@ -1362,6 +1362,9 @@ pub async fn collect_diagnostic(app: AppHandle, state: State<'_, AppState>, req:
     let _ = writeln!(r, "=== Diagnostic Geoventure Launcher (Rust) ===");
     let _ = writeln!(r, "Date : {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z"));
     let _ = writeln!(r, "Launcher : {}", app.package_info().version);
+    if let Ok(Some(acc)) = load_account_session(&state.session_dir).await {
+        let _ = writeln!(r, "Joueur : {}", acc.username);
+    }
     let _ = writeln!(r, "Système : {}", sys.os);
     let _ = writeln!(r, "Processeur : {} ({} cœurs)", sys.cpu_name, sys.cpu_cores);
     let gpus = tokio::task::spawn_blocking(crate::gpu::detect).await.unwrap_or_default();

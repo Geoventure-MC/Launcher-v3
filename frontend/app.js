@@ -230,8 +230,21 @@
   }
 
   let lastBg = null;
+  // Logo d'un serveur : celui du panel s'il y en a un (l'équipe peut le changer sans nouvelle version),
+  // sinon celui fourni avec le launcher.
+  function logoFor(srv) {
+    return (srv && safeHttps(srv.icon)) || artFor(srv && srv.id, 'logo');
+  }
+  // Fond d'écran du grade du joueur (page « Fonds » du panel, role_data), sinon celui du serveur.
+  function roleBackground() {
+    const role = state.account && state.account.role && state.account.role.name;
+    const data = state.config && state.config.role_data;
+    if (!role || !data || typeof data !== 'object') return null;
+    const hit = Object.values(data).find((r) => r && String(r.name || '').toLowerCase() === String(role).toLowerCase());
+    return hit ? safeHttps(hit.background) : null;
+  }
   function renderBackground() {
-    const src = artFor(settings.instance, 'bg');
+    const src = roleBackground() || artFor(settings.instance, 'bg');
     if (src === lastBg) return;
     lastBg = src;
     const bg = $('backdrop-img');
@@ -247,7 +260,7 @@
     box.replaceChildren();
     for (const srv of state.servers) {
       const status = state.statuses.find((s) => s.id === srv.id);
-      const logo = artFor(srv.id, 'logo');
+      const logo = logoFor(srv);
       const color = safeColor(srv.theme_color || srv.color) || '#4ade80';
       const tip = status && status.online ? `${srv.name} · ${status.players ?? 0} en ligne` : `${srv.name}${status ? ' · hors ligne' : ''}`;
       const btn = el('button', {
@@ -268,7 +281,7 @@
     $('server-name').textContent = srv.name || 'Geoventure';
     $('server-card-name').textContent = srv.name || 'Geoventure';
     $('server-card-desc').textContent = srv.description || '';
-    const logo = artFor(srv.id, 'logo');
+    const logo = logoFor(srv);
     $('server-logo').src = logo || 'assets/img/icon.png';
     $('server-img').src = artFor(srv.id, 'bg');
     renderBackground();
@@ -320,7 +333,9 @@
       mergeServers(res.config.servers);
       const l = res.config.loader;
       $('info-version').textContent = `Minecraft ${res.config.game_version || '1.20.1'}${l && l.enable && l.build ? ` · Forge ${String(l.build).replace(/^1\.20\.1-/, '')}` : ''}`;
-      $('splash').textContent = res.config.splash ? `« ${stripTags(res.config.splash)} »` : '';
+      $('splash').textContent = res.config.splash
+        ? `« ${stripTags(res.config.splash)} »${res.config.splash_author ? ` — ${stripTags(res.config.splash_author)}` : ''}`
+        : '';
       if (res.offline) setBadge('Hors ligne · dernière config connue', 'warn');
       else if (res.config.maintenance) setBadge('Maintenance', 'warn');
       else setBadge('Panel en ligne', 'ok');
@@ -333,6 +348,7 @@
     renderServers();
     renderChannel();
     renderAlert();
+    if (state.account) renderAccount(state.account);
     updatePlayButton();
   }
 
@@ -622,6 +638,12 @@
       const rc = account.role && safeColor(account.role.color);
       $('az-role').style.color = rc || '';
       $('profile-name').textContent = account.username;
+      // Réglages « Afficher le grade » et « Afficher l'argent » du panel (page Général).
+      const cfg = state.config || {};
+      $('az-role').classList.toggle('hidden', cfg.role === false);
+      $('profile-role').classList.toggle('hidden', cfg.role === false);
+      $('stat-money-wrap').classList.toggle('hidden', cfg.money === false || !Number.isFinite(Number(account.money)));
+      $('stat-money').textContent = fmtNum(Math.floor(Number(account.money) || 0));
       $('profile-role').textContent = account.role ? account.role.name : 'Joueur';
       $('az-status').textContent = '';
     } else {
@@ -629,6 +651,7 @@
       setTimeout(() => $('az-email').focus(), 50);
     }
     renderChannel();
+    renderBackground();
     updatePlayButton();
   }
 

@@ -171,3 +171,13 @@ test('merveille affichée sur l’accueil', async () => {
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+test('réglages du panel : logo, fond du grade, auteur de la citation, argent', async () => {
+  const { page, context, errors } = await open();
+  assert.equal(await page.getAttribute('#server-logo', 'src'), 'https://launcher.example/storage/geo.png');
+  assert.equal(await page.textContent('#splash'), '« Fonde ton pays ! » — Équipe');
+  assert.equal(await page.textContent('#stat-money'), (1234).toLocaleString('fr-FR'));
+  assert.equal(await page.evaluate(() => document.getElementById('stat-money-wrap').classList.contains('hidden')), false);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
