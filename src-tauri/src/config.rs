@@ -59,6 +59,9 @@ pub struct ServerSummary {
     pub color: Option<String>,
     pub is_default: bool,
     pub azauth: Option<String>,
+    /// Autres champs du panel (canal, grades autorisés…) transmis tels quels à l'interface.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Configuration renvoyée par `https://launcher.geoventure.fr/utils/api`.
@@ -88,6 +91,9 @@ pub struct PanelConfig {
     pub servers: Vec<ServerSummary>,
     pub rpc_activation: bool,
     pub rpc_id: Option<String>,
+    /// Autres champs du panel (alertes, liste blanche, grades des canaux…) transmis tels quels.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -389,7 +395,7 @@ mod tests {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut buf = [0u8; 1024];
             let _ = socket.read(&mut buf).await;
-            let body = r#"{"maintenance":false,"game_version":"1.20.1","dataDirectory":"geoventure","verify":true,"loader":{"type":"forge","build":"47.3.0","enable":true}}"#;
+            let body = r#"{"maintenance":false,"game_version":"1.20.1","dataDirectory":"geoventure","verify":true,"loader":{"type":"forge","build":"47.3.0","enable":true},"test_roles":["Staff"]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -418,6 +424,7 @@ mod tests {
         assert!(!online.offline);
         assert_eq!(online.config.game_version, "1.20.1");
         assert_eq!(online.config.loader.build, "47.3.0");
+        assert_eq!(online.config.extra.get("test_roles"), Some(&serde_json::json!(["Staff"])));
 
         // 2. Serveur arrêté -> bascule automatique sur le cache hors-ligne sans bloquer
         let offline = client

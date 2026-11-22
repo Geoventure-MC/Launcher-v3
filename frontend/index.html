@@ -7,88 +7,218 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-dot"></span>
-        <h1>Geoventure Launcher</h1>
-        <span id="status-badge" class="badge">Connexion…</span>
-      </div>
-      <div class="topbar-actions">
-        <select id="instance-select" aria-label="Serveur">
-          <option value="geoventure">Geoventure</option>
-          <option value="elandor">Elandor</option>
-          <option value="pokeland">Pokeland</option>
-        </select>
-        <select id="channel-select" aria-label="Canal">
-          <option value="stable">Stable</option>
-          <option value="test">Test</option>
-        </select>
-        <button id="btn-refresh" class="btn-secondary">Actualiser</button>
-        <button id="btn-devtools" class="btn-secondary" title="Ouvrir DevTools (F12)">F12</button>
-      </div>
-    </header>
+  <!-- Mise à jour du launcher (au démarrage) -->
+  <div id="update-overlay" class="overlay hidden" role="dialog" aria-live="polite">
+    <div class="overlay-card">
+      <h2>Mise à jour du launcher</h2>
+      <p id="update-text" class="muted">Téléchargement…</p>
+      <div class="progress-bar"><div id="update-fill" class="progress-fill"></div></div>
+    </div>
+  </div>
 
-    <main class="grid">
-      <section class="card">
-        <h2>Compte Azuriom</h2>
-        <div id="az-account-box" class="account-box hidden">
-          <img id="az-avatar" class="avatar" alt="Skin Azuriom" />
+  <!-- Connexion -->
+  <div id="login-screen" class="login-screen hidden">
+    <form id="az-login-form" class="login-card">
+      <div class="brand-big"><span class="brand-dot"></span>Geoventure</div>
+      <p class="muted">Connectez-vous avec votre compte du site.</p>
+      <label>
+        E-mail ou pseudo
+        <input id="az-email" type="text" autocomplete="username" required />
+      </label>
+      <label>
+        Mot de passe
+        <input id="az-password" type="password" autocomplete="current-password" required />
+      </label>
+      <label id="az-2fa-wrap" class="hidden">
+        Code de double authentification
+        <input id="az-2fa" type="text" inputmode="numeric" maxlength="10" autocomplete="one-time-code" />
+      </label>
+      <button type="submit" class="btn-primary">Se connecter</button>
+      <p id="az-status" class="form-status" role="status"></p>
+    </form>
+  </div>
+
+  <div class="app-shell">
+    <nav class="sidebar" aria-label="Navigation">
+      <div class="brand"><span class="brand-dot"></span><span>Geoventure</span></div>
+      <button class="nav-btn active" data-page="home">🏠 <span>Accueil</span></button>
+      <button class="nav-btn" data-page="profile">🏆 <span>Profil</span></button>
+      <button class="nav-btn" data-page="settings">⚙️ <span>Réglages</span></button>
+      <button class="nav-btn" data-page="console">🧾 <span>Console</span></button>
+      <div class="sidebar-foot">
+        <div id="account-mini" class="account-mini hidden">
+          <img id="az-avatar" class="avatar" alt="" />
           <div class="account-meta">
             <strong id="az-username">—</strong>
-            <span id="az-role" class="muted">—</span>
-          </div>
-          <button id="btn-logout" class="btn-secondary">Déconnexion</button>
-        </div>
-
-        <form id="az-login-form" class="form-stack">
-          <label>
-            Email ou pseudo Azuriom
-            <input id="az-email" type="text" autocomplete="username" required placeholder="joueur@geoventure.fr" />
-          </label>
-          <label>
-            Mot de passe
-            <input id="az-password" type="password" autocomplete="current-password" required />
-          </label>
-          <label id="az-2fa-wrap" class="hidden">
-            Code 2FA Azuriom
-            <input id="az-2fa" type="text" inputmode="numeric" maxlength="10" placeholder="123456" />
-          </label>
-          <button type="submit" class="btn-primary">Se connecter via Azuriom</button>
-        </form>
-        <p id="az-status" class="muted"></p>
-      </section>
-
-      <section class="card">
-        <h2>Instance &amp; Java 17</h2>
-        <div id="panel-info" class="info-list">
-          <div><span>Panel :</span> <strong id="info-panel">launcher.geoventure.fr</strong></div>
-          <div><span>Version :</span> <strong id="info-version">—</strong></div>
-          <div><span>Java :</span> <strong id="info-java">Détection…</strong></div>
-          <div><span>RAM / Profil :</span> <strong id="info-ram">—</strong></div>
-        </div>
-        <div class="progress-wrap">
-          <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
-          <small id="progress-text" class="muted">Prêt</small>
-        </div>
-        <div class="action-row">
-          <button id="btn-sync" class="btn-secondary">Vérifier &amp; synchroniser</button>
-          <button id="btn-play" class="btn-primary" disabled>Jouer</button>
-        </div>
-      </section>
-
-      <section class="card console-card">
-        <div class="console-header">
-          <h2>Console de logs intégrée</h2>
-          <div class="console-actions">
-            <button id="btn-copy-logs" class="btn-secondary">Copier</button>
-            <button id="btn-clear-logs" class="btn-secondary">Effacer</button>
+            <span id="az-role" class="muted small">—</span>
           </div>
         </div>
-        <pre id="log-output" class="log-output"></pre>
+        <button id="btn-logout" class="btn-ghost small hidden">Se déconnecter</button>
+        <span id="launcher-version" class="muted small"></span>
+      </div>
+    </nav>
+
+    <main class="content">
+      <!-- ACCUEIL -->
+      <section id="page-home" class="page">
+        <div id="notifications" class="notifications"></div>
+        <div id="alert-banner" class="alert-banner hidden"></div>
+
+        <div class="hero card">
+          <div class="hero-top">
+            <div>
+              <h1 id="server-name">Geoventure</h1>
+              <p id="splash" class="muted"></p>
+            </div>
+            <span id="status-badge" class="badge">Connexion…</span>
+          </div>
+
+          <div id="server-pills" class="pills" role="tablist" aria-label="Serveurs"></div>
+
+          <div class="row">
+            <div id="channel-switch" class="segmented" role="radiogroup" aria-label="Canal">
+              <button data-channel="stable" class="seg active" role="radio" aria-checked="true">Stable</button>
+              <button data-channel="test" class="seg" role="radio" aria-checked="false">🧪 Test</button>
+            </div>
+            <span id="channel-hint" class="muted small"></span>
+          </div>
+
+          <div class="server-status" id="server-status">
+            <span class="dot"></span><span id="server-status-text">Statut du serveur…</span>
+          </div>
+
+          <div id="maintenance-box" class="maintenance hidden"></div>
+
+          <div class="play-zone">
+            <div class="progress-wrap">
+              <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+              <small id="progress-text" class="muted">Prêt</small>
+            </div>
+            <button id="btn-play" class="btn-play" disabled>Jouer</button>
+          </div>
+          <p id="play-block-reason" class="muted small"></p>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h2>Événements</h2>
+            <div id="game-events" class="events"><p class="muted">Aucun événement pour le moment.</p></div>
+          </div>
+          <div class="card">
+            <h2>Votre installation</h2>
+            <div class="info-list">
+              <div><span>Version</span><strong id="info-version">—</strong></div>
+              <div><span>Java</span><strong id="info-java">Java 17 (installé automatiquement)</strong></div>
+              <div><span>Mémoire</span><strong id="info-ram">—</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PROFIL -->
+      <section id="page-profile" class="page hidden">
+        <div class="grid-2">
+          <div class="card">
+            <h2>Succès <span id="ach-score" class="muted small"></span></h2>
+            <div id="achievements" class="achievements"><p class="muted">Chargement…</p></div>
+          </div>
+          <div class="stack">
+            <div class="card">
+              <h2>Classement</h2>
+              <ol id="leaderboard" class="leaderboard"><li class="muted">Chargement…</li></ol>
+            </div>
+            <div class="card">
+              <h2>Saison</h2>
+              <div id="season"><p class="muted">Chargement…</p></div>
+            </div>
+            <div class="card">
+              <h2>Factions</h2>
+              <table class="table"><thead><tr><th>Faction</th><th>Membres</th><th>Puissance</th></tr></thead>
+                <tbody id="factions"><tr><td colspan="3" class="muted">Chargement…</td></tr></tbody></table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RÉGLAGES -->
+      <section id="page-settings" class="page hidden">
+        <div class="grid-2">
+          <div class="card">
+            <h2>Performances</h2>
+            <p id="hw-summary" class="muted small"></p>
+            <div id="profile-switch" class="segmented" role="radiogroup" aria-label="Profil de performance">
+              <button data-profile="eco" class="seg">Économe</button>
+              <button data-profile="balanced" class="seg">Équilibré</button>
+              <button data-profile="performance" class="seg">Performant</button>
+            </div>
+            <p id="profile-hint" class="muted small"></p>
+            <label class="slider">Mémoire minimale : <strong id="ram-min-val"></strong>
+              <input id="ram-min" type="range" min="1" max="16" step="1" />
+            </label>
+            <label class="slider">Mémoire maximale : <strong id="ram-max-val"></strong>
+              <input id="ram-max" type="range" min="1" max="16" step="1" />
+            </label>
+            <label>Arguments Java (un par ligne)
+              <textarea id="jvm-args" rows="3" spellcheck="false"></textarea>
+            </label>
+          </div>
+
+          <div class="card">
+            <h2>Jeu</h2>
+            <label>Java
+              <select id="java-select"><option value="">Automatique (Java 17 fourni)</option></select>
+            </label>
+            <label>Résolution
+              <select id="resolution">
+                <option value="auto">Par défaut</option>
+                <option value="1280x720">1280 × 720</option>
+                <option value="1600x900">1600 × 900</option>
+                <option value="1920x1080">1920 × 1080</option>
+              </select>
+            </label>
+            <label>Pendant la partie
+              <select id="after-launch">
+                <option value="keep">Garder le launcher ouvert</option>
+                <option value="hide">Cacher le launcher (réaffiché à la fermeture du jeu)</option>
+                <option value="close">Fermer le launcher</option>
+              </select>
+            </label>
+            <h3>Mods optionnels</h3>
+            <div id="optional-mods" class="mods"><p class="muted small">Aucun mod optionnel.</p></div>
+          </div>
+
+          <div class="card">
+            <h2>Maintenance</h2>
+            <div class="action-row">
+              <button id="btn-repair" class="btn-secondary">🔧 Réparer l'installation</button>
+              <button id="btn-open-dir" class="btn-secondary">📂 Ouvrir le dossier du jeu</button>
+            </div>
+            <p id="repair-status" class="muted small" role="status"></p>
+            <div class="action-row">
+              <button id="btn-check-update" class="btn-secondary">Chercher une mise à jour</button>
+            </div>
+            <p id="update-status" class="muted small" role="status"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- CONSOLE -->
+      <section id="page-console" class="page hidden">
+        <div class="card console-card">
+          <div class="console-header">
+            <h2>Console</h2>
+            <div class="console-actions">
+              <button id="btn-copy-logs" class="btn-secondary">Copier</button>
+              <button id="btn-clear-logs" class="btn-secondary">Effacer</button>
+              <button id="btn-devtools" class="btn-secondary" title="Outils de développement (F12)">F12</button>
+            </div>
+          </div>
+          <pre id="log-output" class="log-output"></pre>
+        </div>
       </section>
     </main>
   </div>
+  <div id="toast" class="toast hidden" role="status"></div>
   <script src="app.js"></script>
 </body>
 </html>

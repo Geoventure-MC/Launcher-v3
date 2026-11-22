@@ -24,7 +24,7 @@ use crate::logs::{LogEntry, LogLevel, LogStore};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use sysinfo::System;
-use tauri::{AppHandle, Emitter, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 pub struct AppState {
     pub panel_client: PanelClient,
@@ -33,6 +33,7 @@ pub struct AppState {
     pub data_root_dir: PathBuf,
     pub logs: LogStore,
     pub launching: Arc<AtomicBool>,
+    pub game_running: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -404,26 +405,61 @@ pub fn preview_forge_launch_args(config: ForgeLaunchConfig) -> LauncherResult<Ve
     build_forge_1_20_1_args(&config)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LaunchResult {
+    pub ok: bool,
+    pub pid: Option<u32>,
+    /// `{ code, message }`, même forme que les erreurs des commandes.
+    pub error: Option<serde_json::Value>,
+}
+
 /// Bouton « Jouer » : installe ce qui manque (Java 17, Minecraft, Forge, modpack) puis lance le
-/// jeu. Fonctionne sur un PC neuf. Un seul lancement à la fois.
+/// jeu. Fonctionne sur un PC neuf.
+///
+/// La commande répond TOUT DE SUITE et le travail continue en tâche de fond ; le résultat arrive
+/// par l'événement `launcher://launch-result`. Une requête IPC qui dure plusieurs dizaines de
+/// secondes peut être renvoyée une seconde fois par le pont Tauri sous Linux (le jeu se lançait
+/// alors deux fois). Deux verrous en plus : un seul lancement à la fois, et pas de nouveau
+/// lancement tant que le jeu tourne.
 #[tauri::command]
-pub async fn launch_instance(
+pub fn launch_instance(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
     req: LaunchInstanceRequest,
-) -> LauncherResult<u32> {
+) -> LauncherResult<()> {
+    if state.game_running.load(Ordering::SeqCst) {
+        return Err(LauncherError::InvalidLaunchConfig("Le jeu est déjà ouvert.".into()));
+    }
     if state.launching.swap(true, Ordering::SeqCst) {
         return Err(LauncherError::InvalidLaunchConfig(
             "Un lancement est déjà en cours.".into(),
         ));
     }
-    let res = run_launch(&app, &window, &state, &req).await;
-    state.launching.store(false, Ordering::SeqCst);
-    if let Err(err) = &res {
-        emit_log(&app, &state.logs, LogLevel::Error, "launch", err.to_string());
-    }
-    res
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        // Future volumineuse (installation complète) : sur le tas, pas sur la pile du thread Tokio.
+        let res = Box::pin(run_launch(&app, &window, state.inner(), &req)).await;
+        state.launching.store(false, Ordering::SeqCst);
+        let payload = match res {
+            Ok(pid) => LaunchResult { ok: true, pid: Some(pid), error: None },
+            Err(err) => {
+                emit_log(&app, &state.logs, LogLevel::Error, "launch", err.to_string());
+                LaunchResult { ok: false, pid: None, error: serde_json::to_value(&err).ok() }
+            }
+        };
+        let _ = app.emit("launcher://launch-result", payload);
+    });
+    Ok(())
+}
+
+/// Le jeu lancé par ce launcher est-il encore ouvert ?
+#[tauri::command]
+pub fn game_status(state: State<'_, AppState>) -> serde_json::Value {
+    serde_json::json!({
+        "launching": state.launching.load(Ordering::SeqCst),
+        "running": state.game_running.load(Ordering::SeqCst),
+    })
 }
 
 async fn run_launch(
@@ -465,7 +501,7 @@ async fn run_launch(
     };
 
     // 1. Minecraft vanilla (donne aussi la version de Java attendue)
-    let vanilla = installer.install_vanilla(&req.mc_version).await?;
+    let vanilla = Box::pin(installer.install_vanilla(&req.mc_version)).await?;
 
     // 2. Java : chemin choisi par le joueur s'il est valide, sinon le Java 17 de Mojang
     let java_path = match req
@@ -479,15 +515,13 @@ async fn run_launch(
             emit_log(app, &state.logs, LogLevel::Info, "java", format!("Java personnalisé : {}", custom.label));
             PathBuf::from(custom.path)
         }
-        None => installer.install_java(&vanilla).await?,
+        None => Box::pin(installer.install_java(&vanilla)).await?,
     };
 
     // 3. Forge
     let use_forge = req.loader_enable && req.loader_type.eq_ignore_ascii_case("forge");
     if use_forge {
-        installer
-            .install_forge(&req.mc_version, &req.loader_build, &java_path, &vanilla)
-            .await?;
+        Box::pin(installer.install_forge(&req.mc_version, &req.loader_build, &java_path, &vanilla)).await?;
     } else if req.loader_enable {
         return Err(LauncherError::InvalidLaunchConfig(format!(
             "Loader « {} » pas encore pris en charge par ce launcher (Forge uniquement).",
@@ -515,7 +549,7 @@ async fn run_launch(
     {
         Ok(manifest) => {
             let app_m = app.clone();
-            let report = sync_files(
+            let report = Box::pin(sync_files(
                 PanelClient::download_client()?,
                 &manifest,
                 &game_dir,
@@ -532,7 +566,7 @@ async fn run_launch(
                         },
                     );
                 },
-            )
+            ))
             .await?;
             if let Some(first) = report.failed.first() {
                 return Err(LauncherError::Internal(format!(
@@ -634,6 +668,7 @@ async fn run_launch(
     let win_exit = window.clone();
     let logs_exit = state.logs.clone();
     let after_exit = after.clone();
+    let running_exit = Arc::clone(&state.game_running);
     let pid = spawn_resolved_forge_with_exit(
         &java_path.to_string_lossy(),
         &game_dir,
@@ -643,6 +678,7 @@ async fn run_launch(
             let _ = app_log.emit("launcher://log", entry);
         },
         move |code| {
+            running_exit.store(false, Ordering::SeqCst);
             let entry = logs_exit.push(
                 if code == Some(0) { LogLevel::Info } else { LogLevel::Warn },
                 "launch",
@@ -657,6 +693,7 @@ async fn run_launch(
         },
     )
     .await?;
+    state.game_running.store(true, Ordering::SeqCst);
 
     emit_log(app, &state.logs, LogLevel::Info, "launch", format!("Minecraft démarré (PID {pid})."));
     match after.as_str() {
@@ -885,12 +922,24 @@ pub async fn check_launcher_update(app: AppHandle) -> LauncherResult<LauncherUpd
 }
 
 /// Télécharge la mise à jour (signature vérifiée), l'installe puis redémarre le launcher.
+/// Répond tout de suite ; une erreur arrive par `launcher://update-error`.
 #[tauri::command]
-pub async fn install_launcher_update(app: AppHandle, state: State<'_, AppState>) -> LauncherResult<()> {
-    use tauri_plugin_updater::UpdaterExt;
-    if state.launching.load(Ordering::SeqCst) {
-        return Err(LauncherError::Internal("Lancement du jeu en cours : mise à jour reportée.".into()));
+pub fn install_launcher_update(app: AppHandle, state: State<'_, AppState>) -> LauncherResult<()> {
+    if state.launching.load(Ordering::SeqCst) || state.game_running.load(Ordering::SeqCst) {
+        return Err(LauncherError::Internal("Partie en cours : mise à jour reportée.".into()));
     }
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = download_and_install_update(&app).await {
+            let state = app.state::<AppState>();
+            emit_log(&app, &state.logs, LogLevel::Warn, "update", err.to_string());
+            let _ = app.emit("launcher://update-error", err.to_string());
+        }
+    });
+    Ok(())
+}
+
+async fn download_and_install_update(app: &AppHandle) -> LauncherResult<()> {
+    use tauri_plugin_updater::UpdaterExt;
     let update = app
         .updater()
         .map_err(|e| LauncherError::Internal(e.to_string()))?
@@ -900,7 +949,10 @@ pub async fn install_launcher_update(app: AppHandle, state: State<'_, AppState>)
     let Some(update) = update else {
         return Ok(());
     };
-    emit_log(&app, &state.logs, LogLevel::Info, "update", format!("Mise à jour du launcher vers {}…", update.version));
+    {
+        let state = app.state::<AppState>();
+        emit_log(app, &state.logs, LogLevel::Info, "update", format!("Mise à jour du launcher vers {}…", update.version));
+    }
     let app_p = app.clone();
     let mut downloaded = 0u64;
     update
@@ -914,4 +966,104 @@ pub async fn install_launcher_update(app: AppHandle, state: State<'_, AppState>)
         .await
         .map_err(|e| LauncherError::Internal(format!("Installation de la mise à jour impossible : {e}")))?;
     app.restart();
+}
+
+/// Nom de fichier de mod sûr : un seul segment, se termine par `.jar`.
+pub fn safe_mod_file_name(name: &str) -> Option<String> {
+    let n = name.trim();
+    if n.is_empty()
+        || n.len() > 200
+        || n.contains(['/', '\\', '\0'])
+        || n.contains("..")
+        || !n.to_ascii_lowercase().ends_with(".jar")
+    {
+        return None;
+    }
+    Some(n.to_string())
+}
+
+fn mods_dir_for(
+    state: &AppState,
+    data_directory: &str,
+    instance: Option<&str>,
+    channel: Option<&str>,
+) -> PathBuf {
+    resolve_game_directory(
+        &state.data_root_dir,
+        data_directory,
+        instance,
+        "geoventure",
+        channel.unwrap_or("stable"),
+    )
+    .join("mods")
+}
+
+/// État des mods optionnels : `true` = actif (ou pas encore téléchargé et non désactivé).
+#[tauri::command]
+pub fn optional_mods_state(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    files: Vec<String>,
+) -> std::collections::HashMap<String, bool> {
+    let dir = mods_dir_for(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    files
+        .into_iter()
+        .filter_map(|f| safe_mod_file_name(&f))
+        .map(|f| {
+            let disabled = dir.join(format!("{f}-disable")).exists();
+            (f, !disabled)
+        })
+        .collect()
+}
+
+/// Active ou désactive un mod optionnel (`mods/<nom>.jar` ↔ `mods/<nom>.jar-disable`).
+/// Un mod pas encore téléchargé est désactivé par un fichier vide `<nom>.jar-disable`, que la
+/// synchronisation du modpack respecte.
+#[tauri::command]
+pub async fn set_optional_mod(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    file: String,
+    enabled: bool,
+) -> LauncherResult<bool> {
+    let name = safe_mod_file_name(&file).ok_or_else(|| LauncherError::UnsafePath(file.clone()))?;
+    let dir = mods_dir_for(&state, &data_directory, instance.as_deref(), channel.as_deref());
+    tokio::fs::create_dir_all(&dir).await?;
+    let on = dir.join(&name);
+    let off = dir.join(format!("{name}-disable"));
+    if enabled {
+        if let Ok(meta) = tokio::fs::metadata(&off).await {
+            if meta.len() == 0 || on.exists() {
+                tokio::fs::remove_file(&off).await?;
+            } else {
+                tokio::fs::rename(&off, &on).await?;
+            }
+        }
+    } else if on.exists() {
+        if off.exists() {
+            tokio::fs::remove_file(&off).await?;
+        }
+        tokio::fs::rename(&on, &off).await?;
+    } else if !off.exists() {
+        tokio::fs::write(&off, b"").await?;
+    }
+    Ok(enabled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mod_file_names_are_confined() {
+        assert_eq!(safe_mod_file_name("minimap.jar").as_deref(), Some("minimap.jar"));
+        assert!(safe_mod_file_name("../evil.jar").is_none());
+        assert!(safe_mod_file_name("a/b.jar").is_none());
+        assert!(safe_mod_file_name("a\\b.jar").is_none());
+        assert!(safe_mod_file_name("readme.txt").is_none());
+    }
 }

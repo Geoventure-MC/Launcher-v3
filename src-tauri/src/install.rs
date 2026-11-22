@@ -200,13 +200,13 @@ impl Installer {
         label: &'static str,
     ) -> LauncherResult<SyncReport> {
         let me = self.clone();
-        let report = sync_files(
+        let report = Box::pin(sync_files(
             self.http.clone(),
             files,
             base,
             &SyncOptions::game_files(mode),
             move |p| me.progress(phase, label, &p),
-        )
+        ))
         .await?;
         if let Some(first) = report.failed.first() {
             return Err(LauncherError::Internal(format!(
@@ -830,6 +830,9 @@ impl Installer {
                     if status.success() {
                         return Ok(());
                     }
+                    for l in &tail {
+                        self.log(LogLevel::Warn, l.clone());
+                    }
                     let last = tail.iter().rev().take(5).rev().cloned().collect::<Vec<_>>().join(" | ");
                     return Err(LauncherError::InvalidLaunchConfig(format!(
                         "Le patch Forge « {task} » a échoué (code {:?}) : {last}", status.code()
@@ -837,10 +840,11 @@ impl Installer {
                 }
                 msg = tokio::time::timeout(PROCESSOR_IDLE_TIMEOUT, rx.recv()) => {
                     match msg {
-                        Ok(Some((level, line))) => {
+                        Ok(Some((_level, line))) => {
+                            // Les processeurs écrivent des milliers de lignes (« Patching … ») : on
+                            // ne garde que les dernières, montrées seulement en cas d'échec.
                             if tail.len() > 50 { tail.remove(0); }
-                            tail.push(line.clone());
-                            self.log(level, line);
+                            tail.push(line);
                         }
                         Ok(None) => {
                             // Sorties fermées : on attend la fin du processus, avec le même délai.

@@ -121,7 +121,7 @@ pub fn is_ignored_path(rel_path: &str, ignored: &[String]) -> bool {
 pub async fn compute_sha1_file(path: &Path) -> LauncherResult<String> {
     let mut file = tokio::fs::File::open(path).await?;
     let mut hasher = Sha1::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buf).await?;
         if n == 0 {
@@ -135,7 +135,7 @@ pub async fn compute_sha1_file(path: &Path) -> LauncherResult<String> {
 pub async fn compute_sha256_file(path: &Path) -> LauncherResult<String> {
     let mut file = tokio::fs::File::open(path).await?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buf).await?;
         if n == 0 {
@@ -472,7 +472,7 @@ where
     F: Fn(DownloadProgress) + Send + Sync + 'static,
 {
     let concurrency = opts.concurrency;
-    let scan = diff_verify_with(manifest, game_dir, opts).await?;
+    let scan = Box::pin(diff_verify_with(manifest, game_dir, opts)).await?;
     let mut to_download = Vec::with_capacity(scan.missing.len() + scan.corrupted.len());
     to_download.extend(scan.missing);
     to_download.extend(scan.corrupted);
@@ -507,7 +507,7 @@ where
                 .await
                 .map_err(|e| LauncherError::Internal(e.to_string()))?;
 
-            let res = download_and_verify_one(&client_cloned, &entry, &target).await;
+            let res = Box::pin(download_and_verify_one(&client_cloned, &entry, &target)).await;
             let done = completed_cloned.fetch_add(1, Ordering::SeqCst) + 1;
             let total_bytes = match &res {
                 Ok(n) => bytes_cloned.fetch_add(*n, Ordering::SeqCst) + *n,

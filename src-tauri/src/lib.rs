@@ -58,6 +58,7 @@ pub fn run() {
         data_root_dir,
         logs,
         launching: Default::default(),
+        game_running: Default::default(),
     };
 
     tauri::Builder::default()
@@ -88,6 +89,9 @@ pub fn run() {
             commands::open_game_dir,
             commands::repair_instance,
             commands::check_launcher_update,
+            commands::optional_mods_state,
+            commands::game_status,
+            commands::set_optional_mod,
             commands::install_launcher_update,
         ])
         .run(tauri::generate_context!())
