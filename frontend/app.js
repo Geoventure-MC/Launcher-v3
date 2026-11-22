@@ -31,7 +31,7 @@
   };
   const settings = Object.assign({
     instance: 'geoventure', channel: 'stable', profile: null, ramMin: null, ramMax: null, jvmArgs: null,
-    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {},
+    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false,
   }, store.get('nexus_rust_settings', {}));
   const saveSettings = () => store.set('nexus_rust_settings', settings);
   const stats = Object.assign({ launch_count: 0, playtime_minutes: 0, instances: [], first_launch: null, unlocked: [] },
@@ -118,10 +118,43 @@
   });
   $('btn-clear-logs').addEventListener('click', async () => { $('log-output').replaceChildren(); await invoke('clear_logs').catch(() => {}); });
   $('btn-copy-logs').addEventListener('click', async () => {
-    const text = await invoke('export_logs_text').catch(() => $('log-output').textContent);
+    const text = logKind === 'live' ? await invoke('export_logs_text').catch(() => $('log-output').textContent) : $('log-file').textContent;
     try { await navigator.clipboard.writeText(text); toast('Journal copié.'); } catch (_) { toast('Copie impossible.'); }
   });
   $('btn-devtools').addEventListener('click', () => invoke('toggle_devtools').catch(() => {}));
+
+  // Journaux sur le disque : jeu (latest.log), dernier rapport de plantage, launcher.log.
+  let logKind = 'live';
+  async function showLogKind(kind) {
+    logKind = kind;
+    document.querySelectorAll('#log-kinds .seg-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.kind === kind);
+      b.setAttribute('aria-selected', String(b.dataset.kind === kind));
+    });
+    const live = kind === 'live';
+    $('log-output').classList.toggle('hidden', !live);
+    $('log-file').classList.toggle('hidden', live);
+    ['btn-autoscroll', 'btn-clear-logs'].forEach((id) => $(id).classList.toggle('hidden', !live));
+    $('log-file-path').textContent = '';
+    if (live) return;
+    $('log-file').textContent = 'Lecture…';
+    try {
+      const r = await invoke('read_game_log', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel, kind });
+      if (logKind !== kind) return;
+      $('log-file').textContent = r.text || ({ latest: 'Le jeu n’a pas encore écrit de journal.', crash: 'Aucun rapport de plantage. Tant mieux !', launcher: 'Journal vide.' })[kind];
+      $('log-file-path').textContent = r.path ? `Fin du fichier · chemins et jeton masqués · ${r.path}` : '';
+      $('log-file').scrollTop = $('log-file').scrollHeight;
+    } catch (err) {
+      $('log-file').textContent = `Lecture impossible : ${errMsg(err)}`;
+    }
+  }
+  document.querySelectorAll('#log-kinds .seg-btn').forEach((b) => b.addEventListener('click', () => showLogKind(b.dataset.kind)));
+  $('btn-log-folder').addEventListener('click', () => {
+    const p = logKind === 'launcher' || logKind === 'live'
+      ? invoke('open_launcher_logs')
+      : invoke('open_game_dir', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel });
+    p.catch((err) => toast(`Ouverture impossible : ${errMsg(err)}`));
+  });
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'I')) {
       e.preventDefault();
@@ -339,8 +372,11 @@
     btn.classList.toggle('busy', state.launching);
     $('play-label').textContent = state.launching ? 'Lancement…' : (state.gameRunning ? 'En jeu' : 'Jouer');
     btn.title = reason || (state.gameRunning ? 'Le jeu est ouvert' : 'Jouer');
-    $('btn-join').disabled = btn.disabled;
-    $('btn-join').textContent = state.gameRunning ? 'En jeu' : (state.launching ? 'Lancement…' : 'Rejoindre le serveur');
+    // Jeu ouvert : le bouton du serveur devient « Fermer le jeu ».
+    $('btn-join').disabled = state.launching || (!state.gameRunning && !!reason);
+    $('btn-join').textContent = state.gameRunning ? '✕ Fermer le jeu' : (state.launching ? 'Lancement…' : 'Rejoindre le serveur');
+    $('btn-join').classList.toggle('btn-danger', state.gameRunning);
+    $('btn-kill').classList.toggle('hidden', !state.gameRunning);
     $('play-block-reason').textContent = reason;
   }
 
@@ -717,6 +753,7 @@
           ram_min_gb: ram.min, ram_max_gb: ram.max, extra_jvm_args: launchJvmArgs(), ignored: ignored.map(String),
           server_host: joinServer && host ? String(host) : null, server_port: joinServer && Number.isFinite(port) ? port : null,
           width, height, after_launch: settings.afterLaunch,
+          light_game_options: !!settings.lightGame && activeProfile() === 'eco',
         },
       });
       const pid = await result;
@@ -739,7 +776,24 @@
     }
   }
   $('btn-play').addEventListener('click', () => play(settings.joinServer));
-  $('btn-join').addEventListener('click', () => play(true));
+  $('btn-join').addEventListener('click', () => (state.gameRunning ? killGame() : play(true)));
+  $('btn-kill').addEventListener('click', killGame);
+
+  // Deux clics pour fermer le jeu (le premier prévient), sans boîte de dialogue native.
+  let killArmedUntil = 0;
+  async function killGame() {
+    if (!state.gameRunning) return;
+    if (Date.now() > killArmedUntil) {
+      killArmedUntil = Date.now() + 5000;
+      toast('Cliquez encore sur « Fermer le jeu » pour confirmer : ce qui n’est pas sauvegardé en jeu sera perdu.');
+      return;
+    }
+    killArmedUntil = 0;
+    const ok = await invoke('kill_game').catch(() => false);
+    toast(ok ? 'Fermeture du jeu…' : 'Le jeu n’est plus ouvert.');
+  }
+
+  function activeProfile() { return settings.ramMin ? null : (settings.profile || (state.system && state.system.recommended_profile)); }
 
   function onGameExit(code) {
     state.gameRunning = false;
@@ -750,14 +804,31 @@
       state.gameStartedAt = null;
       saveStats();
       checkAchievements(true);
-      if (code != null && code !== 0 && minutes < 30) {
-        $('crash-text').textContent = `Minecraft s’est arrêté avec le code ${code}. Le diagnostic rassemble les journaux utiles (sans données personnelles) pour comprendre ce qui s’est passé.`;
-        $('crash-overlay').classList.remove('hidden');
-      }
     }
   }
+
+  // Fermeture anormale : le launcher a analysé le rapport de plantage et la fin du journal.
+  function onGameCrash(a) {
+    a = a || {};
+    const cause = $('crash-cause');
+    if (a.cause) {
+      cause.replaceChildren(el('strong', { text: a.cause.title }), document.createTextNode(a.cause.advice));
+      cause.classList.remove('hidden');
+    } else cause.classList.add('hidden');
+    $('crash-text').textContent = `Minecraft s’est arrêté (code ${a.exit_code == null ? '?' : a.exit_code}). `
+      + (a.cause ? 'Si le conseil ne suffit pas, le diagnostic rassemble les journaux utiles (sans données personnelles).'
+        : 'La cause n’a pas été reconnue : le diagnostic rassemble les journaux utiles (sans données personnelles).');
+    $('crash-excerpt').textContent = a.excerpt || '';
+    $('crash-excerpt').classList.toggle('hidden', !a.excerpt);
+    state.lastCrashHasReport = !!a.crash_report;
+    $('crash-overlay').classList.remove('hidden');
+  }
   $('crash-close').addEventListener('click', () => $('crash-overlay').classList.add('hidden'));
-  $('crash-console').addEventListener('click', () => { $('crash-overlay').classList.add('hidden'); showPage('console'); });
+  $('crash-console').addEventListener('click', () => {
+    $('crash-overlay').classList.add('hidden');
+    showPage('console');
+    showLogKind(state.lastCrashHasReport ? 'crash' : 'latest');
+  });
   $('crash-diag').addEventListener('click', () => { $('crash-overlay').classList.add('hidden'); openDiagnostic(); });
 
   // ===========================================================================
@@ -915,8 +986,12 @@
     $('hw-ram').textContent = `${sys.total_ram_gb} Go (jeu : ${sys.plan.cap_gb} Go max)`;
     $('hw-free').textContent = `${sys.free_ram_gb} Go`;
     $('hw-os').textContent = sys.os;
+    if (!state.gpus) state.gpus = await invoke('detect_gpus').catch(() => ({ gpus: [], only_integrated: false }));
+    $('hw-gpu').textContent = state.gpus.gpus.length ? state.gpus.gpus.join(' · ') : 'Non détectée';
+    $('light-game').checked = !!settings.lightGame;
     const rec = sys.recommended_profile;
-    $('optimize-text').textContent = `Profil conseillé pour ce PC : ${PROFILE_NAMES[rec]}. Le jeu n’utilisera jamais plus de 60 % de la mémoire (${sys.plan.cap_gb} Go).`;
+    $('optimize-text').textContent = `Profil conseillé pour ce PC : ${PROFILE_NAMES[rec]}. Le jeu n’utilisera jamais plus de 60 % de la mémoire (${sys.plan.cap_gb} Go).`
+      + (state.gpus && state.gpus.only_integrated ? ' Carte graphique intégrée : cochez « alléger les réglages du jeu » pour gagner en fluidité.' : '');
 
     const ids = ['eco', 'balanced', 'performance'];
     const plans = await Promise.all(ids.map((id) => invoke('get_system_overview', { profile: id }).then((s) => s.plan).catch(() => null)));
@@ -987,6 +1062,19 @@
     $('info-profile').textContent = 'Personnalisé';
     renderRam();
   }
+  $('light-game').addEventListener('change', () => {
+    settings.lightGame = $('light-game').checked;
+    saveSettings();
+    toast(settings.lightGame
+      ? (activeProfile() === 'eco' ? 'Réglages légers appliqués au prochain lancement.' : 'Réglages légers : actifs quand le profil Économe est choisi.')
+      : 'Le jeu garde vos réglages. « Remettre mes réglages du jeu » rétablit ceux d’avant.');
+  });
+  $('btn-restore-options').addEventListener('click', async () => {
+    try {
+      const done = await invoke('restore_game_options', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel });
+      toast(done ? 'Vos réglages du jeu d’avant le profil Économe sont remis.' : 'Rien à remettre : le launcher n’a pas modifié vos réglages du jeu.');
+    } catch (err) { toast(`Impossible : ${errMsg(err)}`); }
+  });
   $('ram-min').addEventListener('input', () => onRamInput('min'));
   $('ram-max').addEventListener('input', () => onRamInput('max'));
   $('jvm-args').addEventListener('change', () => {
@@ -1174,6 +1262,7 @@
       on('launcher://install-progress', (e) => onInstallProgress(e.payload)),
       on('launcher://launch-result', (e) => onLaunchResult(e.payload)),
       on('launcher://game-exit', (e) => onGameExit(e.payload)),
+      on('launcher://game-crash', (e) => onGameCrash(e.payload)),
       on('launcher://game-slow', () => toast('🐢 Le jeu met longtemps à s’ouvrir. Patientez encore un peu ; s’il n’apparaît pas, lancez un diagnostic.')),
       on('launcher://update-progress', (e) => { const p = e.payload || {}; $('update-fill').style.width = `${p.total ? Math.round((p.downloaded / p.total) * 100) : 0}%`; }),
       on('launcher://update-error', (e) => { $('update-overlay').classList.add('hidden'); toast(`Mise à jour impossible : ${e.payload}`); }),

@@ -9,6 +9,10 @@ pub mod install;
 pub mod java;
 pub mod launch;
 pub mod logs;
+pub mod secure;
+pub mod crash;
+pub mod gpu;
+pub mod gameopts;
 
 use commands::AppState;
 use config::PanelClient;
@@ -57,6 +61,17 @@ pub fn run() {
         .ok()
         .and_then(|u| PanelClient::new(u.trim(), config::HttpTimeouts::default()).ok())
         .unwrap_or(panel_client);
+    // Copie du journal sur le disque : <données du launcher>/logs/launcher.log
+    let log_dir = session_dir.join("logs");
+    match logs.attach_file(&log_dir) {
+        Ok(p) => {
+            logs.push(LogLevel::Info, "core", format!("Journal enregistré dans {}", p.display()));
+        }
+        Err(e) => {
+            logs.push(LogLevel::Warn, "core", format!("launcher.log impossible : {e}"));
+        }
+    }
+    logs.push(LogLevel::Info, "core", format!("Version {} ({})", env!("CARGO_PKG_VERSION"), std::env::consts::OS));
     let state = AppState {
         panel_client: std::sync::RwLock::new(panel_client),
         cache_dir,
@@ -65,6 +80,9 @@ pub fn run() {
         logs,
         launching: Default::default(),
         game_running: Default::default(),
+        game_kill: Default::default(),
+        kill_requested: Default::default(),
+        log_dir,
     };
 
     tauri::Builder::default()
@@ -105,6 +123,11 @@ pub fn run() {
             commands::send_diagnostic,
             commands::set_optional_mod,
             commands::install_launcher_update,
+            commands::kill_game,
+            commands::read_game_log,
+            commands::detect_gpus,
+            commands::restore_game_options,
+            commands::open_launcher_logs,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du démarrage de Geoventure Launcher");

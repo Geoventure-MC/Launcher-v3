@@ -362,7 +362,7 @@ pub async fn spawn_resolved_forge<F>(
 where
     F: Fn(LogEntry) + Send + Sync + 'static,
 {
-    spawn_resolved_forge_with_exit(java_bin, game_dir, plan, logs, on_log, |_| {}).await
+    spawn_resolved_forge_with_exit(java_bin, game_dir, plan, logs, None, on_log, |_| {}).await
 }
 
 /// Comme [`spawn_resolved_forge`], avec un rappel à la fermeture du jeu (code de sortie).
@@ -371,6 +371,7 @@ pub async fn spawn_resolved_forge_with_exit<F, E>(
     game_dir: &Path,
     plan: &crate::forge::ResolvedForgePlan,
     logs: LogStore,
+    kill: Option<std::sync::Arc<tokio::sync::Notify>>,
     on_log: F,
     on_exit: E,
 ) -> LauncherResult<u32>
@@ -427,7 +428,20 @@ where
     }
 
     tokio::spawn(async move {
-        let code = child.wait().await.ok().and_then(|st| st.code());
+        // « Fermer le jeu » : `notify_waiters` ne laisse pas de permis en réserve, donc un ancien
+        // appel ne peut pas tuer la partie suivante.
+        let code = match kill {
+            Some(k) => {
+                tokio::select! {
+                    st = child.wait() => st.ok().and_then(|st| st.code()),
+                    _ = k.notified() => {
+                        let _ = child.kill().await;
+                        child.wait().await.ok().and_then(|st| st.code())
+                    }
+                }
+            }
+            None => child.wait().await.ok().and_then(|st| st.code()),
+        };
         on_exit(code);
     });
 

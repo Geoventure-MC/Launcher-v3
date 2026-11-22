@@ -38,7 +38,12 @@ pub struct LogEntry {
 pub struct LogStore {
     inner: Arc<Mutex<VecDeque<LogEntry>>>,
     capacity: usize,
+    /// Copie sur le disque (`launcher.log`), pour retrouver ce qui s'est passé après coup.
+    file: Arc<Mutex<Option<(std::fs::File, u64)>>>,
 }
+
+/// Taille maximale de `launcher.log` pour une session (au-delà, on n'écrit plus).
+const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 impl Default for LogStore {
     fn default() -> Self {
@@ -52,7 +57,34 @@ impl LogStore {
         Self {
             inner: Arc::new(Mutex::new(VecDeque::with_capacity(cap))),
             capacity: cap,
+            file: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Écrit désormais aussi dans `<dir>/launcher.log`. L'ancien fichier devient `launcher.old.log`.
+    /// Les lignes déjà en mémoire y sont recopiées.
+    pub fn attach_file(&self, dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        use std::io::Write;
+        std::fs::create_dir_all(dir)?;
+        let path = dir.join("launcher.log");
+        if path.exists() {
+            let _ = std::fs::rename(&path, dir.join("launcher.old.log"));
+        }
+        let mut f = std::fs::File::create(&path)?;
+        let mut written = 0u64;
+        for e in self.list() {
+            let line = format!("{}\n", Self::format_line(&e));
+            written += line.len() as u64;
+            f.write_all(line.as_bytes())?;
+        }
+        if let Ok(mut g) = self.file.lock() {
+            *g = Some((f, written));
+        }
+        Ok(path)
+    }
+
+    fn format_line(e: &LogEntry) -> String {
+        format!("[{}] [{}] [{}] {}", e.timestamp, e.level.as_str(), e.source, e.message)
     }
 
     pub fn push(&self, level: LogLevel, source: impl Into<String>, message: impl Into<String>) -> LogEntry {
@@ -67,6 +99,16 @@ impl LogStore {
                 guard.pop_front();
             }
             guard.push_back(entry.clone());
+        }
+        if let Ok(mut g) = self.file.lock() {
+            if let Some((f, written)) = g.as_mut() {
+                if *written < MAX_FILE_BYTES {
+                    use std::io::Write;
+                    let line = format!("{}\n", Self::format_line(&entry));
+                    *written += line.len() as u64;
+                    let _ = f.write_all(line.as_bytes());
+                }
+            }
         }
         entry
     }
@@ -87,7 +129,7 @@ impl LogStore {
     pub fn export_text(&self) -> String {
         self.list()
             .into_iter()
-            .map(|e| format!("[{}] [{}] [{}] {}", e.timestamp, e.level.as_str(), e.source, e.message))
+            .map(|e| Self::format_line(&e))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -109,6 +151,19 @@ mod tests {
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].message, "msg-2");
         assert_eq!(entries[2].message, "msg-4");
+    }
+
+    #[test]
+    fn file_sink_copies_lines_and_rotates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LogStore::with_capacity(10);
+        store.push(LogLevel::Info, "core", "avant");
+        store.attach_file(tmp.path()).unwrap();
+        store.push(LogLevel::Warn, "launch", "après");
+        let txt = std::fs::read_to_string(tmp.path().join("launcher.log")).unwrap();
+        assert!(txt.contains("avant") && txt.contains("[WARN] [launch] après"));
+        store.attach_file(tmp.path()).unwrap();
+        assert!(tmp.path().join("launcher.old.log").exists());
     }
 
     #[test]

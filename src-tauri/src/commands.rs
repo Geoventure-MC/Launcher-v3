@@ -34,6 +34,12 @@ pub struct AppState {
     pub logs: LogStore,
     pub launching: Arc<AtomicBool>,
     pub game_running: Arc<AtomicBool>,
+    /// « Fermer le jeu » : réveille la tâche qui attend la fin du processus.
+    pub game_kill: Arc<tokio::sync::Notify>,
+    /// Fermeture demandée par le joueur : pas d'analyse de plantage.
+    pub kill_requested: Arc<AtomicBool>,
+    /// Dossier de `launcher.log`.
+    pub log_dir: PathBuf,
 }
 
 impl AppState {
@@ -91,6 +97,9 @@ pub struct LaunchInstanceRequest {
     /// `keep` (défaut), `hide` (cachée pendant la partie, réaffichée à la fermeture du jeu) ou `close`.
     #[serde(default)]
     pub after_launch: Option<String>,
+    /// Profil Économe avec accord du joueur : baisser aussi les réglages du jeu (`options.txt`).
+    #[serde(default)]
+    pub light_game_options: bool,
 }
 
 fn default_loader_type() -> String {
@@ -480,6 +489,96 @@ pub fn launch_instance(
     Ok(())
 }
 
+/// Ferme le jeu lancé par le launcher (bouton « Fermer le jeu »).
+#[tauri::command]
+pub fn kill_game(app: AppHandle, state: State<'_, AppState>) -> bool {
+    if !state.game_running.load(Ordering::SeqCst) {
+        return false;
+    }
+    state.kill_requested.store(true, Ordering::SeqCst);
+    state.game_kill.notify_waiters();
+    emit_log(&app, &state.logs, LogLevel::Warn, "launch", "Fermeture du jeu demandée par le joueur.");
+    true
+}
+
+/// Journal à afficher : `latest` (logs/latest.log du jeu), `crash` (dernier rapport de plantage)
+/// ou `launcher` (launcher.log). Fin du fichier seulement, chemins et jeton masqués.
+#[tauri::command]
+pub async fn read_game_log(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    kind: String,
+) -> LauncherResult<serde_json::Value> {
+    use crate::extras::{redact, tail_file};
+    let game_dir = resolve_game_directory(
+        &state.data_root_dir,
+        &data_directory,
+        instance.as_deref(),
+        "geoventure",
+        channel.as_deref().unwrap_or("stable"),
+    );
+    let path = match kind.as_str() {
+        "latest" => Some(game_dir.join("logs/latest.log")),
+        "crash" => crate::crash::crash_report_since(&game_dir, std::time::UNIX_EPOCH),
+        "launcher" => Some(state.log_dir.join("launcher.log")),
+        _ => return Err(LauncherError::InvalidLaunchConfig(format!("Journal inconnu : {kind}"))),
+    };
+    let Some(path) = path else {
+        return Ok(serde_json::json!({ "path": null, "text": "" }));
+    };
+    let text = tail_file(&path, 1500).unwrap_or_default();
+    let mut secrets = Vec::new();
+    if let Ok(Some(acc)) = load_account_session(&state.session_dir).await {
+        secrets.push(acc.access_token);
+    }
+    let homes: Vec<String> = directories::BaseDirs::new()
+        .map(|b| vec![b.home_dir().to_string_lossy().to_string()])
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "path": path.exists().then(|| path.to_string_lossy().to_string()),
+        "text": redact(&text, &homes, &secrets),
+    }))
+}
+
+/// Cartes graphiques détectées (diagnostic et conseils).
+#[tauri::command]
+pub async fn detect_gpus() -> serde_json::Value {
+    let gpus = tokio::task::spawn_blocking(crate::gpu::detect).await.unwrap_or_default();
+    serde_json::json!({ "gpus": gpus, "only_integrated": crate::gpu::only_integrated(&gpus) })
+}
+
+/// Remet les réglages du jeu comme avant le profil Économe.
+#[tauri::command]
+pub async fn restore_game_options(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+) -> LauncherResult<bool> {
+    let game_dir = resolve_game_directory(
+        &state.data_root_dir,
+        &data_directory,
+        instance.as_deref(),
+        "geoventure",
+        channel.as_deref().unwrap_or("stable"),
+    );
+    Ok(crate::gameopts::restore(&game_dir)?)
+}
+
+/// Ouvre le dossier des journaux du launcher.
+#[tauri::command]
+pub fn open_launcher_logs(app: AppHandle, state: State<'_, AppState>) -> LauncherResult<String> {
+    use tauri_plugin_opener::OpenerExt;
+    let _ = std::fs::create_dir_all(&state.log_dir);
+    let s = state.log_dir.to_string_lossy().to_string();
+    app.opener()
+        .open_path(s.clone(), None::<&str>)
+        .map_err(|e| LauncherError::Internal(e.to_string()))?;
+    Ok(s)
+}
+
 /// Le jeu lancé par ce launcher est-il encore ouvert ?
 #[tauri::command]
 pub fn game_status(state: State<'_, AppState>) -> serde_json::Value {
@@ -642,6 +741,14 @@ async fn run_launch(
         );
     }
 
+    if req.light_game_options {
+        match crate::gameopts::apply_light(&game_dir) {
+            Ok(changed) if !changed.is_empty() => emit_log(app, &state.logs, LogLevel::Info, "launch", format!("Réglages légers du jeu appliqués : {}.", changed.join(", "))),
+            Ok(_) => {}
+            Err(e) => emit_log(app, &state.logs, LogLevel::Warn, "launch", format!("options.txt non modifié : {e}")),
+        }
+    }
+
     // 5. Lancement
     let plan = resolve_installed_forge_plan(&ForgeResolveRequest {
         game_dir: game_dir.clone(),
@@ -700,11 +807,16 @@ async fn run_launch(
     let window_seen = Arc::new(AtomicBool::new(false));
     let win_hide = window.clone();
     let window_seen_watch = Arc::clone(&window_seen);
+    let started_at = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
+    let game_dir_exit = game_dir.clone();
+    let killed_exit = Arc::clone(&state.kill_requested);
+    state.kill_requested.store(false, Ordering::SeqCst);
     let pid = spawn_resolved_forge_with_exit(
         &java_path.to_string_lossy(),
         &game_dir,
         &plan,
         state.logs.clone(),
+        Some(Arc::clone(&state.game_kill)),
         move |entry| {
             // « Cacher le launcher » : seulement quand une fenêtre du jeu est vraiment à l'écran
             // (fenêtre de chargement de Forge ou de Minecraft), jamais avant.
@@ -726,6 +838,29 @@ async fn run_launch(
             );
             let _ = app_exit.emit("launcher://log", entry);
             let _ = app_exit.emit("launcher://game-exit", code);
+            // Fermeture anormale (pas demandée par le joueur) : cause probable et conseil.
+            if code != Some(0) && !killed_exit.swap(false, Ordering::SeqCst) {
+                let recent: String = logs_exit
+                    .list()
+                    .iter()
+                    .rev()
+                    .filter(|e| e.source == "minecraft")
+                    .take(400)
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let analysis = crate::crash::analyze_exit(&game_dir_exit, started_at, code, &recent);
+                let msg = match &analysis.cause {
+                    Some(c) => format!("Plantage analysé : {} — {}", c.title, c.advice),
+                    None => "Plantage sans cause reconnue : lancez un diagnostic.".to_string(),
+                };
+                let entry = logs_exit.push(LogLevel::Warn, "crash", msg);
+                let _ = app_exit.emit("launcher://log", entry);
+                let _ = app_exit.emit("launcher://game-crash", analysis);
+            }
             if after_exit == "hide" {
                 let _ = win_exit.show();
                 let _ = win_exit.set_focus();
@@ -966,6 +1101,10 @@ pub struct UpdateDownloadProgress {
 pub async fn check_launcher_update(app: AppHandle) -> LauncherResult<LauncherUpdateInfo> {
     use tauri_plugin_updater::UpdaterExt;
     let current = app.package_info().version.to_string();
+    // Build de développement : jamais de mise à jour (elle remplacerait le binaire en test).
+    if cfg!(debug_assertions) && std::env::var_os("GEO_DEV_UPDATER").is_none() {
+        return Ok(LauncherUpdateInfo { current, available: false, version: None, notes: None });
+    }
     let updater = app
         .updater()
         .map_err(|e| LauncherError::Internal(format!("Mise à jour indisponible : {e}")))?;
@@ -1220,6 +1359,8 @@ pub async fn collect_diagnostic(app: AppHandle, state: State<'_, AppState>, req:
     let _ = writeln!(r, "Launcher : {}", app.package_info().version);
     let _ = writeln!(r, "Système : {}", sys.os);
     let _ = writeln!(r, "Processeur : {} ({} cœurs)", sys.cpu_name, sys.cpu_cores);
+    let gpus = tokio::task::spawn_blocking(crate::gpu::detect).await.unwrap_or_default();
+    let _ = writeln!(r, "Carte(s) graphique(s) : {}", if gpus.is_empty() { "non détectée".to_string() } else { gpus.join(" | ") });
     let _ = writeln!(r, "Mémoire : {} Go au total, {} Go libres, plafond jeu {} Go", sys.total_ram_gb, sys.free_ram_gb, sys.plan.cap_gb);
     let profile_fr = match sys.recommended_profile {
         PerformanceProfileId::Eco => "Économe",

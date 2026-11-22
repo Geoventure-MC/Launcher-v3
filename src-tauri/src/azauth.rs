@@ -79,12 +79,18 @@ pub fn build_skin_url(base_url: &Url, username: &str) -> String {
     format!("{base_url}api/skin-api/avatars/face/{encoded}")
 }
 
-/// Persiste la session Azuriom dans le répertoire privé du launcher.
+/// Persiste la session Azuriom dans le répertoire privé du launcher. Le jeton part dans le
+/// coffre-fort du système quand il y en a un ; le fichier n'en garde alors qu'une place vide.
 pub async fn save_account_session(storage_dir: &Path, account: &AzAccount) -> LauncherResult<()> {
     tokio::fs::create_dir_all(storage_dir).await?;
     let path = account_session_path(storage_dir);
-    let data = serde_json::to_vec_pretty(account)?;
+    let mut on_disk = account.clone();
+    if crate::secure::store_token(&account.access_token) {
+        on_disk.access_token = String::new();
+    }
+    let data = serde_json::to_vec_pretty(&on_disk)?;
     tokio::fs::write(&path, data).await?;
+    crate::secure::restrict_permissions(&path);
     Ok(())
 }
 
@@ -92,7 +98,22 @@ pub async fn load_account_session(storage_dir: &Path) -> LauncherResult<Option<A
     let path = account_session_path(storage_dir);
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
-            let acc: AzAccount = serde_json::from_slice(&bytes)?;
+            let mut acc: AzAccount = serde_json::from_slice(&bytes)?;
+            if acc.access_token.is_empty() {
+                match crate::secure::load_token() {
+                    Some(t) => acc.access_token = t,
+                    // Coffre-fort vidé ou inaccessible : la session n'est plus utilisable.
+                    None => return Ok(None),
+                }
+            } else if crate::secure::store_token(&acc.access_token) {
+                // Ancienne session en clair : on la déplace dans le coffre-fort.
+                let mut on_disk = acc.clone();
+                on_disk.access_token = String::new();
+                if let Ok(data) = serde_json::to_vec_pretty(&on_disk) {
+                    let _ = tokio::fs::write(&path, data).await;
+                }
+            }
+            crate::secure::restrict_permissions(&path);
             Ok(Some(acc))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -101,6 +122,7 @@ pub async fn load_account_session(storage_dir: &Path) -> LauncherResult<Option<A
 }
 
 pub async fn clear_account_session(storage_dir: &Path) -> LauncherResult<()> {
+    crate::secure::delete_token();
     let path = account_session_path(storage_dir);
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(()),

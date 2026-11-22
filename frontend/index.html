@@ -79,6 +79,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>
         </button>
         <span class="play-label" id="play-label">Jouer</span>
+        <button class="kill-btn hidden" id="btn-kill" title="Fermer le jeu" aria-label="Fermer le jeu">✕ Fermer</button>
       </div>
 
       <nav class="sidebar-bottom" aria-label="Navigation">
@@ -242,6 +243,7 @@
               <div class="hw"><span>Mémoire</span><strong id="hw-ram">—</strong></div>
               <div class="hw"><span>Mémoire libre</span><strong id="hw-free">—</strong></div>
               <div class="hw"><span>Système</span><strong id="hw-os">—</strong></div>
+              <div class="hw"><span>Carte graphique</span><strong id="hw-gpu">—</strong></div>
             </div>
             <div class="optimize">
               <div>
@@ -264,6 +266,8 @@
             <div class="ram-visual"><div class="ram-total"><div class="ram-used" id="ram-bar"></div></div><span class="muted small" id="ram-bar-text"></span></div>
             <label class="slider">Minimum : <strong id="ram-min-val"></strong><input id="ram-min" type="range" min="1" max="16" step="1" /></label>
             <label class="slider">Maximum : <strong id="ram-max-val"></strong><input id="ram-max" type="range" min="1" max="16" step="1" /></label>
+            <label class="toggle"><input type="checkbox" id="light-game" /><span>Avec le profil Économe, alléger aussi les réglages du jeu (distance de vue 8, ombres, nuages et particules réduits). Vos réglages sont gardés de côté.</span></label>
+            <button class="btn btn-small" id="btn-restore-options">Remettre mes réglages du jeu</button>
             <label class="field"><span>Arguments Java (un par ligne)</span><textarea id="jvm-args" rows="4" spellcheck="false"></textarea></label>
           </div>
         </div>
@@ -339,7 +343,14 @@
       <section id="page-console" class="page hidden">
         <header class="page-head">
           <h1>Console</h1>
+          <div class="seg" role="tablist" aria-label="Journal affiché" id="log-kinds">
+            <button class="seg-btn active" data-kind="live" role="tab" aria-selected="true">En direct</button>
+            <button class="seg-btn" data-kind="latest" role="tab" aria-selected="false">Journal du jeu</button>
+            <button class="seg-btn" data-kind="crash" role="tab" aria-selected="false">Dernier plantage</button>
+            <button class="seg-btn" data-kind="launcher" role="tab" aria-selected="false">launcher.log</button>
+          </div>
           <div class="actions">
+            <button class="btn" id="btn-log-folder" title="Ouvrir le dossier des journaux">📂</button>
             <button class="btn" id="btn-autoscroll" aria-pressed="true">Défilement auto</button>
             <button class="btn" id="btn-copy-logs">Copier</button>
             <button class="btn" id="btn-clear-logs">Effacer</button>
@@ -347,6 +358,8 @@
           </div>
         </header>
         <pre id="log-output" class="log-output"></pre>
+        <pre id="log-file" class="log-output hidden" tabindex="0"></pre>
+        <p class="muted small" id="log-file-path"></p>
       </section>
     </main>
   </div>
@@ -385,10 +398,12 @@
   <div id="crash-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="crash-title">
     <div class="modal">
       <h2 id="crash-title">⚠️ Le jeu s’est fermé de façon inattendue</h2>
+      <p class="crash-cause hidden" id="crash-cause"></p>
       <p class="muted" id="crash-text"></p>
+      <pre class="crash-excerpt hidden" id="crash-excerpt"></pre>
       <div class="actions">
         <button class="btn btn-primary" id="crash-diag">Lancer un diagnostic</button>
-        <button class="btn" id="crash-console">Voir la console</button>
+        <button class="btn" id="crash-console">Voir le rapport</button>
         <button class="btn" id="crash-close">Fermer</button>
       </div>
     </div>

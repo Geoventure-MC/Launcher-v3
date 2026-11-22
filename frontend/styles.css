@@ -504,3 +504,16 @@ textarea { font: 12px/1.5 ui-monospace, Consolas, monospace; resize: vertical; }
 body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
   animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important;
 }
+
+/* Lot 1 : fermer le jeu, journaux, plantage */
+.kill-btn { margin-top: 6px; border: 1px solid rgba(248,113,113,.45); background: rgba(248,113,113,.12); color: #fca5a5; border-radius: 8px; font: 600 10px/1 inherit; font-family: inherit; padding: 5px 6px; cursor: pointer; }
+.kill-btn:hover { background: rgba(248,113,113,.25); }
+.btn-danger { background: rgba(248,113,113,.16) !important; border-color: rgba(248,113,113,.5) !important; color: #fecaca !important; }
+.btn-small { padding: 6px 12px; font-size: 12px; margin: 4px 0 10px; }
+.seg { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.08); flex-wrap: wrap; }
+.seg-btn { border: 0; background: transparent; color: var(--muted); padding: 6px 12px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.seg-btn.active { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--text); }
+.page-head { flex-wrap: wrap; gap: 10px; }
+.crash-cause { margin: 0 0 8px; padding: 12px 14px; border-radius: 12px; background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.35); }
+.crash-cause strong { display: block; margin-bottom: 4px; }
+.crash-excerpt { max-height: 120px; overflow: auto; font-size: 11px; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.35); white-space: pre-wrap; word-break: break-word; }
