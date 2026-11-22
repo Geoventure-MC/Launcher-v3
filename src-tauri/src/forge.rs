@@ -313,7 +313,10 @@ pub fn resolve_installed_forge_plan(req: &ForgeResolveRequest) -> LauncherResult
     let mut vars = HashMap::<&str, String>::new();
     vars.insert("library_directory", lib_dir.to_string_lossy().to_string());
     vars.insert("classpath_separator", cp_sep.to_string());
-    vars.insert("version_name", forge_json.id.clone());
+    // Le jar vanilla du classpath est `versions/<mc>/<mc>.jar` : `${version_name}.jar` doit le
+    // désigner pour que Forge l'exclue (`-DignoreList`), sinon deux modules « minecraft » se
+    // chargent et le jeu plante. Même valeur que l'ancien launcher (minecraft-java-core).
+    vars.insert("version_name", parent_id.clone());
     vars.insert("natives_directory", natives_dir.to_string_lossy().to_string());
     vars.insert("launcher_name", "GeoventureRust".to_string());
     vars.insert("launcher_version", "2.0".to_string());
@@ -326,6 +329,11 @@ pub fn resolve_installed_forge_plan(req: &ForgeResolveRequest) -> LauncherResult
     vars.insert("assets_index_name", asset_index);
     vars.insert("user_type", "mojang".to_string());
     vars.insert("version_type", "release".to_string());
+    vars.insert("auth_session", req.access_token.clone());
+    vars.insert("auth_xuid", req.access_token.clone());
+    vars.insert("clientid", req.access_token.clone());
+    vars.insert("user_properties", "{}".to_string());
+    vars.insert("game_assets", assets_dir.to_string_lossy().to_string());
 
     let ram_max = req.ram_max_gb.max(1);
     let ram_min = req.ram_min_gb.clamp(1, ram_max);
@@ -335,7 +343,24 @@ pub fn resolve_installed_forge_plan(req: &ForgeResolveRequest) -> LauncherResult
         format!("-Xmx{}M", ram_max * 1024),
     ];
     jvm_args.extend(with_utf8(sanitize_jvm_args(&req.extra_jvm_args)));
-    jvm_args.push(format!("-Djava.library.path={}", natives_dir.to_string_lossy()));
+    let natives = natives_dir.to_string_lossy().to_string();
+    jvm_args.push(format!("-Djava.library.path={natives}"));
+    jvm_args.push(format!("-Djna.tmpdir={natives}"));
+    jvm_args.push(format!("-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}"));
+    jvm_args.push(format!("-Dio.netty.native.workdir={natives}"));
+    jvm_args.push("-Dfml.ignoreInvalidMinecraftCertificates=true".to_string());
+    jvm_args.push("-Dminecraft.launcher.brand=Nexus".to_string());
+    jvm_args.push("-Dminecraft.launcher.version=2.0".to_string());
+    if cfg!(target_os = "macos") {
+        jvm_args.push("-XstartOnFirstThread".to_string());
+    } else if cfg!(target_os = "windows") {
+        jvm_args.push(
+            "-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"
+                .to_string(),
+        );
+    } else {
+        jvm_args.push("-Xss1M".to_string());
+    }
 
     if let Some(args_sec) = &forge_json.arguments {
         for raw in extract_string_args(&args_sec.jvm) {
@@ -445,7 +470,7 @@ mod tests {
             "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
             "inheritsFrom": "1.20.1",
             "arguments": {
-                "jvm": ["-DlibraryDirectory=${library_directory}", "--add-modules", "ALL-MODULE-PATH"],
+                "jvm": ["-DlibraryDirectory=${library_directory}", "-DignoreList=client-extra,${version_name}.jar", "--add-modules", "ALL-MODULE-PATH"],
                 "game": ["--launchTarget", "forgeclient", "--fml.forgeVersion", "47.4.23"]
             },
             "libraries": [
@@ -482,6 +507,7 @@ mod tests {
         assert_eq!(plan.classpath.len(), 1);
         assert!(plan.missing_libraries.is_empty());
         assert!(plan.jvm_args.iter().any(|a| a.starts_with("-DlibraryDirectory=") && !a.contains("${")));
+        assert!(plan.jvm_args.contains(&"-DignoreList=client-extra,1.20.1.jar".to_string()));
         assert!(plan.game_args.contains(&"--port".to_string()));
         assert!(plan.game_args.contains(&"2086".to_string()));
     }

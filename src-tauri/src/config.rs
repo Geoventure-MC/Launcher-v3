@@ -220,6 +220,37 @@ impl PanelClient {
         &self.http
     }
 
+    /// Client des gros téléchargements (jeu, Java, Forge, mods) : délais de connexion et
+    /// d'inactivité stricts, mais PAS de délai total (un jar de 30 Mo sur une connexion lente
+    /// dépasserait les 12 s du client du panel). Une connexion qui ne reçoit plus rien
+    /// pendant 30 s est coupée et le fichier est retenté.
+    pub fn download_client() -> LauncherResult<reqwest::Client> {
+        reqwest::Client::builder()
+            .user_agent("GeoventureLauncher/2.0 (Rust/Tauri)")
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| LauncherError::Internal(format!("Initialisation HTTP impossible : {e}")))
+    }
+
+    /// Lit une route JSON du panel (`utils/notifications`, `utils/leaderboards`…) telle quelle.
+    pub async fn fetch_panel_json(
+        &self,
+        endpoint: &str,
+        instance: Option<&str>,
+        channel: &str,
+    ) -> LauncherResult<serde_json::Value> {
+        let url = build_panel_url(&self.base_url, endpoint, instance, channel)?;
+        self.fetch_json::<serde_json::Value>(&url).await
+    }
+
+    /// Lit une URL JSON quelconque (Mojang, Forge) avec le client du panel.
+    pub async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> LauncherResult<T> {
+        let u = Url::parse(url).map_err(|e| LauncherError::InvalidUrl(e.to_string()))?;
+        self.fetch_json(&u).await
+    }
+
     /// Récupère `utils/api` avec repli automatique sur le cache disque hors-ligne.
     pub async fn fetch_config_with_cache(
         &self,

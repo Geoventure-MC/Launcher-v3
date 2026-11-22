@@ -362,6 +362,22 @@ pub async fn spawn_resolved_forge<F>(
 where
     F: Fn(LogEntry) + Send + Sync + 'static,
 {
+    spawn_resolved_forge_with_exit(java_bin, game_dir, plan, logs, on_log, |_| {}).await
+}
+
+/// Comme [`spawn_resolved_forge`], avec un rappel à la fermeture du jeu (code de sortie).
+pub async fn spawn_resolved_forge_with_exit<F, E>(
+    java_bin: &str,
+    game_dir: &Path,
+    plan: &crate::forge::ResolvedForgePlan,
+    logs: LogStore,
+    on_log: F,
+    on_exit: E,
+) -> LauncherResult<u32>
+where
+    F: Fn(LogEntry) + Send + Sync + 'static,
+    E: FnOnce(Option<i32>) + Send + 'static,
+{
     if !is_valid_java_binary_syntax(java_bin) {
         return Err(LauncherError::InvalidLaunchConfig(format!(
             "Binaire Java invalide : {java_bin}"
@@ -373,6 +389,10 @@ where
     full_args.extend(plan.game_args.iter().cloned());
 
     let mut cmd = Command::new(java_bin);
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x0800_0000);
+    }
     cmd.args(&full_args)
         .current_dir(game_dir)
         .stdout(std::process::Stdio::piped())
@@ -407,7 +427,8 @@ where
     }
 
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        let code = child.wait().await.ok().and_then(|st| st.code());
+        on_exit(code);
     });
 
     Ok(pid)

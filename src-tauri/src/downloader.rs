@@ -146,8 +146,26 @@ pub async fn compute_sha256_file(path: &Path) -> LauncherResult<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Niveau de contrôle d'un fichier déjà présent sur le disque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyMode {
+    /// Taille + empreintes (modpack, Java, librairies).
+    Full,
+    /// Taille seule : pour les ressources du jeu, rangées sous leur propre empreinte
+    /// (`assets/objects/ab/abcdef…`) et trop nombreuses pour être relues à chaque lancement.
+    SizeOnly,
+}
+
 /// Vérifie la taille, le SHA-256 (si présent) et le SHA-1 (si présent) d'un fichier local.
 pub async fn verify_local_file(entry: &ManifestEntry, target: &Path) -> LauncherResult<bool> {
+    verify_local_file_with(entry, target, VerifyMode::Full).await
+}
+
+pub async fn verify_local_file_with(
+    entry: &ManifestEntry,
+    target: &Path,
+    mode: VerifyMode,
+) -> LauncherResult<bool> {
     let meta = match tokio::fs::metadata(target).await {
         Ok(m) if m.is_file() => m,
         _ => return Ok(false),
@@ -157,6 +175,10 @@ pub async fn verify_local_file(entry: &ManifestEntry, target: &Path) -> Launcher
         if meta.len() != expected_size {
             return Ok(false);
         }
+    }
+
+    if mode == VerifyMode::SizeOnly && entry.size.is_some() {
+        return Ok(true);
     }
 
     if let Some(expected_sha256) = entry.sha256.as_deref().filter(|s| !s.is_empty()) {
@@ -182,18 +204,112 @@ pub async fn diff_verify_manifest(
     game_dir: &Path,
     ignored: &[String],
 ) -> LauncherResult<DiffScanReport> {
+    diff_verify_with(manifest, game_dir, &SyncOptions::modpack(ignored.to_vec())).await
+}
+
+/// Règles de synchronisation d'un lot de fichiers.
+#[derive(Debug, Clone)]
+pub struct SyncOptions {
+    pub ignored: Vec<String>,
+    pub verify: VerifyMode,
+    /// Protège les réglages du joueur (options.txt, config/… déjà présents) et les mods
+    /// désactivés (`<mod>.jar-disable`) : jamais remplacés par une mise à jour du modpack.
+    pub protect_user_files: bool,
+    pub concurrency: usize,
+}
+
+impl SyncOptions {
+    pub fn modpack(ignored: Vec<String>) -> Self {
+        Self {
+            ignored,
+            verify: VerifyMode::Full,
+            protect_user_files: true,
+            concurrency: DEFAULT_CONCURRENCY,
+        }
+    }
+
+    pub fn game_files(verify: VerifyMode) -> Self {
+        Self {
+            ignored: Vec::new(),
+            verify,
+            protect_user_files: false,
+            concurrency: 16,
+        }
+    }
+}
+
+/// Réglages du joueur (même liste que `utils/userdata.js` du launcher Electron).
+pub const USER_FILES: &[&str] = &[
+    "options.txt",
+    "optionsof.txt",
+    "optionsshaders.txt",
+    "servers.dat",
+    "servers.dat_old",
+    "usercache.json",
+    "realms_persistence.json",
+    "hotbar.nbt",
+];
+pub const USER_DIRS: &[&str] = &[
+    "saves",
+    "screenshots",
+    "resourcepacks",
+    "shaderpacks",
+    "logs",
+    "crash-reports",
+    "schematics",
+    "journeymap",
+    "xaero",
+    "XaeroWorldMap",
+    "XaeroWaypoints",
+    "backups",
+    "replay_recordings",
+    "instances",
+];
+
+/// Ce chemin du modpack appartient-il au joueur (jamais remplacé s'il existe déjà) ?
+pub fn is_user_path(rel: &str) -> bool {
+    let p = rel.replace('\\', "/");
+    let p = p.trim_start_matches('/');
+    if USER_FILES.contains(&p) || p.starts_with("config/") {
+        return true;
+    }
+    USER_DIRS
+        .iter()
+        .any(|d| p == *d || p.starts_with(&format!("{d}/")))
+}
+
+fn disabled_variant(target: &Path) -> PathBuf {
+    let mut s = target.as_os_str().to_os_string();
+    s.push("-disable");
+    PathBuf::from(s)
+}
+
+pub async fn diff_verify_with(
+    manifest: &[ManifestEntry],
+    game_dir: &Path,
+    opts: &SyncOptions,
+) -> LauncherResult<DiffScanReport> {
     let mut valid = Vec::new();
     let mut missing = Vec::new();
     let mut corrupted = Vec::new();
 
     for entry in manifest {
-        if is_ignored_path(&entry.path, ignored) {
+        if is_ignored_path(&entry.path, &opts.ignored) {
             continue;
         }
         let target = resolve_safe_path(game_dir, &entry.path)?;
+        if opts.protect_user_files {
+            let exists = tokio::fs::try_exists(&target).await.unwrap_or(false);
+            if (exists && is_user_path(&entry.path))
+                || tokio::fs::try_exists(disabled_variant(&target)).await.unwrap_or(false)
+            {
+                valid.push(entry.clone());
+                continue;
+            }
+        }
         match tokio::fs::metadata(&target).await {
             Ok(meta) if meta.is_file() => {
-                if verify_local_file(entry, &target).await? {
+                if verify_local_file_with(entry, &target, opts.verify).await? {
                     valid.push(entry.clone());
                 } else {
                     corrupted.push(entry.clone());
@@ -339,7 +455,24 @@ pub async fn sync_modpack_parallel<F>(
 where
     F: Fn(DownloadProgress) + Send + Sync + 'static,
 {
-    let scan = diff_verify_manifest(manifest, game_dir, ignored).await?;
+    let mut opts = SyncOptions::modpack(ignored.to_vec());
+    opts.concurrency = concurrency;
+    sync_files(client, manifest, game_dir, &opts, on_progress).await
+}
+
+/// Télécharge en parallèle les fichiers manquants ou altérés d'un lot (modpack, jeu, Java…).
+pub async fn sync_files<F>(
+    client: reqwest::Client,
+    manifest: &[ManifestEntry],
+    game_dir: &Path,
+    opts: &SyncOptions,
+    on_progress: F,
+) -> LauncherResult<SyncReport>
+where
+    F: Fn(DownloadProgress) + Send + Sync + 'static,
+{
+    let concurrency = opts.concurrency;
+    let scan = diff_verify_with(manifest, game_dir, opts).await?;
     let mut to_download = Vec::with_capacity(scan.missing.len() + scan.corrupted.len());
     to_download.extend(scan.missing);
     to_download.extend(scan.corrupted);
@@ -419,6 +552,54 @@ where
     })
 }
 
+/// Supprime de `mods/` les anciens jars qui ne sont plus dans le modpack (sinon deux versions du
+/// même mod se chargent et Forge plante). Ne touche jamais : un mod désactivé (`.jar-disable`),
+/// un mod communauté installé par le joueur, un chemin de la liste `ignored`. Ne fait RIEN si le
+/// manifeste est vide (panel en panne qui renverrait `[]` : on ne vide pas le dossier du joueur).
+pub async fn cleanup_stale_mods(
+    game_dir: &Path,
+    manifest: &[ManifestEntry],
+    ignored: &[String],
+) -> LauncherResult<Vec<String>> {
+    let mut removed = Vec::new();
+    if !manifest.iter().any(|e| e.path.replace('\\', "/").starts_with("mods/")) {
+        return Ok(removed);
+    }
+    let wanted: std::collections::HashSet<String> = manifest
+        .iter()
+        .map(|e| e.path.replace('\\', "/").trim_start_matches("./").to_string())
+        .collect();
+    let community: Vec<String> = tokio::fs::read(game_dir.join("launcher_config/community_mods.json"))
+        .await
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+        .unwrap_or_default();
+
+    let mods_dir = game_dir.join("mods");
+    let mut rd = match tokio::fs::read_dir(&mods_dir).await {
+        Ok(rd) => rd,
+        Err(_) => return Ok(removed),
+    };
+    while let Some(entry) = rd.next_entry().await? {
+        let ft = entry.file_type().await?;
+        if !ft.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.to_ascii_lowercase().ends_with(".jar") {
+            continue;
+        }
+        let rel = format!("mods/{name}");
+        if wanted.contains(&rel) || community.contains(&name) || is_ignored_path(&rel, ignored) {
+            continue;
+        }
+        if tokio::fs::remove_file(entry.path()).await.is_ok() {
+            removed.push(rel);
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +615,59 @@ mod tests {
         assert!(resolve_safe_path(base, "/etc/passwd").is_err());
         assert!(resolve_safe_path(base, "C:\\Windows\\system32\\cmd.exe").is_err());
         assert!(resolve_safe_path(base, "").is_err());
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_only_stale_mods() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mods = tmp.path().join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::create_dir_all(tmp.path().join("launcher_config")).unwrap();
+        for f in ["keep.jar", "old.jar", "mine.jar", "opt.jar-disable", "notes.txt"] {
+            std::fs::write(mods.join(f), b"x").unwrap();
+        }
+        std::fs::write(
+            tmp.path().join("launcher_config/community_mods.json"),
+            br#"["mine.jar"]"#,
+        )
+        .unwrap();
+        let entry = |p: &str| ManifestEntry {
+            path: p.into(),
+            url: "https://x/y".into(),
+            size: None,
+            hash: None,
+            sha256: None,
+        };
+        // Manifeste vide : rien n'est supprimé.
+        assert!(cleanup_stale_mods(tmp.path(), &[], &[]).await.unwrap().is_empty());
+        let removed = cleanup_stale_mods(tmp.path(), &[entry("mods/keep.jar")], &[])
+            .await
+            .unwrap();
+        assert_eq!(removed, vec!["mods/old.jar".to_string()]);
+        assert!(mods.join("keep.jar").exists());
+        assert!(mods.join("mine.jar").exists());
+        assert!(mods.join("opt.jar-disable").exists());
+    }
+
+    #[tokio::test]
+    async fn user_files_and_disabled_mods_are_never_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("config")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("mods")).unwrap();
+        std::fs::write(tmp.path().join("config/geo.toml"), b"perso").unwrap();
+        std::fs::write(tmp.path().join("mods/map.jar-disable"), b"x").unwrap();
+        let entry = |p: &str| ManifestEntry {
+            path: p.into(),
+            url: "https://x/y".into(),
+            size: Some(999),
+            hash: Some("00".into()),
+            sha256: None,
+        };
+        let manifest = vec![entry("config/geo.toml"), entry("mods/map.jar"), entry("mods/new.jar")];
+        let scan = diff_verify_manifest(&manifest, tmp.path(), &[]).await.unwrap();
+        assert_eq!(scan.valid.len(), 2);
+        assert_eq!(scan.missing.len(), 1);
+        assert_eq!(scan.missing[0].path, "mods/new.jar");
     }
 
     #[test]

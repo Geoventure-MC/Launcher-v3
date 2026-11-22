@@ -4,6 +4,7 @@ pub mod config;
 pub mod downloader;
 pub mod error;
 pub mod forge;
+pub mod install;
 pub mod java;
 pub mod launch;
 pub mod logs;
@@ -56,9 +57,11 @@ pub fn run() {
         session_dir,
         data_root_dir,
         logs,
+        launching: Default::default(),
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::fetch_panel_config,
@@ -79,6 +82,10 @@ pub fn run() {
             commands::clear_logs,
             commands::export_logs_text,
             commands::toggle_devtools,
+            commands::panel_get,
+            commands::open_url,
+            commands::open_game_dir,
+            commands::repair_instance,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du démarrage de Geoventure Launcher");
