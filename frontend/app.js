@@ -1,172 +1,208 @@
 (() => {
   'use strict';
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Pont Tauri
-  // ---------------------------------------------------------------------------
-  const tauriCore = window.__TAURI__ && window.__TAURI__.core;
-  const tauriEvent = window.__TAURI__ && window.__TAURI__.event;
-  const invoke = tauriCore
-    ? (cmd, args) => tauriCore.invoke(cmd, args)
+  // ===========================================================================
+  const T = window.__TAURI__ || {};
+  const invoke = T.core
+    ? (cmd, args) => T.core.invoke(cmd, args)
     : async (cmd) => { throw new Error(`Pont Tauri indisponible pour ${cmd}`); };
-
   const $ = (id) => document.getElementById(id);
   const errMsg = (err) => (err && (err.message || err.code)) || String(err);
 
-  // Serveurs connus (même liste que le launcher Electron), complétés par le panel.
+  // Serveurs connus (comme le launcher Electron), complétés par le panel.
   const DEFAULT_SERVERS = [
     { id: 'geoventure', name: 'Geoventure', description: 'Aventure & Exploration', theme_color: '#4ade80', is_default: true },
     { id: 'elandor', name: 'Elandor', description: 'RPG & Fantaisie', theme_color: '#a78bfa' },
     { id: 'pokeland', name: 'Pokeland', description: 'Pokémon & Combat', theme_color: '#fb923c' },
   ];
+  const KNOWN_ART = ['geoventure', 'elandor', 'pokeland'];
+  const PROFILE_NAMES = { eco: 'Économe', balanced: 'Équilibré', performance: 'Performant' };
 
-  // ---------------------------------------------------------------------------
-  // Stockage local (préférences du joueur, compteurs des succès)
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // Stockage local : préférences et compteurs des succès (propres à ce PC)
+  // ===========================================================================
   const store = {
     get(key, fallback) {
-      try {
-        const raw = localStorage.getItem(key);
-        return raw == null ? fallback : JSON.parse(raw);
-      } catch (_) { return fallback; }
+      try { const raw = localStorage.getItem(key); return raw == null ? fallback : JSON.parse(raw); } catch (_) { return fallback; }
     },
-    set(key, value) {
-      try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
-    },
+    set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} },
   };
-
-  const DEFAULT_SETTINGS = {
-    instance: 'geoventure',
-    channel: 'stable',
-    profile: null,
-    ramMin: null,
-    ramMax: null,
-    jvmArgs: null,
-    javaPath: '',
-    resolution: 'auto',
-    afterLaunch: 'keep',
-    joinServer: true,
-    optionalMods: {},
-  };
-  const settings = Object.assign({}, DEFAULT_SETTINGS, store.get('nexus_rust_settings', {}));
+  const settings = Object.assign({
+    instance: 'geoventure', channel: 'stable', profile: null, ramMin: null, ramMax: null, jvmArgs: null,
+    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {},
+  }, store.get('nexus_rust_settings', {}));
   const saveSettings = () => store.set('nexus_rust_settings', settings);
-
-  const stats = Object.assign(
-    { launch_count: 0, playtime_minutes: 0, instances: [], first_launch: null, unlocked: [] },
-    store.get('nexus_rust_stats', {}),
-  );
+  const stats = Object.assign({ launch_count: 0, playtime_minutes: 0, instances: [], first_launch: null, unlocked: [] },
+    store.get('nexus_rust_stats', {}));
   const saveStats = () => store.set('nexus_rust_stats', stats);
 
   const state = {
-    config: null,
-    offline: false,
-    account: null,
-    system: null,
-    launching: false,
-    gameRunning: false,
-    gameStartedAt: null,
-    servers: DEFAULT_SERVERS.slice(),
-    statuses: [],
-    achievements: [],
-    page: 'home',
+    config: null, offline: false, account: null, system: null, plans: {},
+    launching: false, gameRunning: false, gameStartedAt: null,
+    servers: DEFAULT_SERVERS.slice(), statuses: [], achievements: [], news: [], heroIndex: 0, page: 'home',
   };
 
-  // ---------------------------------------------------------------------------
-  // Outils d'affichage (texte uniquement : rien du panel n'est injecté en HTML)
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // Outils d'affichage — tout ce qui vient du panel ou du site est mis en TEXTE
+  // ===========================================================================
   function el(tag, props, children) {
     const node = document.createElement(tag);
-    if (props) {
-      for (const [k, v] of Object.entries(props)) {
-        if (v == null) continue;
-        if (k === 'class') node.className = v;
-        else if (k === 'text') node.textContent = v;
-        else if (k === 'dataset') Object.assign(node.dataset, v);
-        else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
-        else node.setAttribute(k, v);
-      }
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v == null || v === false) continue;
+      if (k === 'class') node.className = v;
+      else if (k === 'text') node.textContent = v;
+      else if (k === 'dataset') Object.assign(node.dataset, v);
+      else if (k === 'style') Object.assign(node.style, v);
+      else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v);
     }
-    for (const c of [].concat(children || [])) {
-      if (c == null) continue;
+    for (const c of [].concat(children ?? [])) {
+      if (c == null || c === false) continue;
       node.append(c instanceof Node ? c : document.createTextNode(String(c)));
     }
     return node;
   }
-
-  function safeColor(c) {
-    return typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : null;
-  }
+  const safeColor = (c) => (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null);
+  const safeHttps = (u) => { try { const x = new URL(String(u)); return x.protocol === 'https:' ? x.href : null; } catch (_) { return null; } };
+  const cssUrl = (u) => `url("${String(u).replace(/["\\\n\r]/g, encodeURIComponent)}")`;
+  const stripTags = (s) => String(s ?? '').replace(/<[^>]*>/g, '');
+  const fmtNum = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString('fr-FR') : String(n ?? ''));
 
   let toastTimer = null;
   function toast(text) {
     const t = $('toast');
+    t.classList.add('hidden');
+    void t.offsetWidth;
     t.textContent = text;
     t.classList.remove('hidden');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => t.classList.add('hidden'), 5000);
   }
 
-  function nowStamp() {
-    return new Date().toTimeString().slice(0, 8);
-  }
-
-  function appendLogLine(entry) {
-    const out = $('log-output');
-    const line = `[${entry.timestamp}] [${String(entry.level).toUpperCase()}] [${entry.source}] ${entry.message}\n`;
-    const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 20;
-    out.append(document.createTextNode(line));
-    // Garde la console légère : 3 000 lignes maximum à l'écran.
-    while (out.childNodes.length > 3000) out.removeChild(out.firstChild);
-    if (stick) out.scrollTop = out.scrollHeight;
-  }
-
-  function uiLog(level, message) {
-    appendLogLine({ timestamp: nowStamp(), level, source: 'ui', message });
+  function setAccent(hex) {
+    const c = safeColor(hex) || '#4ade80';
+    const n = parseInt(c.slice(1), 16);
+    document.documentElement.style.setProperty('--accent', c);
+    document.documentElement.style.setProperty('--accent-rgb', `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`);
   }
 
   function openUrl(url) {
+    if (!url) return;
     invoke('open_url', { url }).catch((e) => toast(`Lien impossible à ouvrir : ${errMsg(e)}`));
   }
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // Console
+  // ===========================================================================
+  let autoScroll = true;
+  function appendLogLine(entry) {
+    const out = $('log-output');
+    const lvl = String(entry.level || 'info').toLowerCase();
+    const line = el('div', { class: `l-${lvl}` }, [
+      `[${entry.timestamp}] `,
+      el('span', { class: 'src', text: `[${entry.source}]` }),
+      ` ${entry.message}`,
+    ]);
+    out.append(line);
+    while (out.childNodes.length > 3000) out.removeChild(out.firstChild);
+    if (autoScroll && state.page === 'console') out.scrollTop = out.scrollHeight;
+  }
+  const uiLog = (level, message) => appendLogLine({ timestamp: new Date().toTimeString().slice(0, 8), level, source: 'ui', message });
+
+  $('btn-autoscroll').addEventListener('click', () => {
+    autoScroll = !autoScroll;
+    $('btn-autoscroll').setAttribute('aria-pressed', String(autoScroll));
+    $('btn-autoscroll').textContent = autoScroll ? 'Défilement auto' : 'Défilement figé';
+  });
+  $('btn-clear-logs').addEventListener('click', async () => { $('log-output').replaceChildren(); await invoke('clear_logs').catch(() => {}); });
+  $('btn-copy-logs').addEventListener('click', async () => {
+    const text = await invoke('export_logs_text').catch(() => $('log-output').textContent);
+    try { await navigator.clipboard.writeText(text); toast('Journal copié.'); } catch (_) { toast('Copie impossible.'); }
+  });
+  $('btn-devtools').addEventListener('click', () => invoke('toggle_devtools').catch(() => {}));
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'I')) {
+      e.preventDefault();
+      invoke('toggle_devtools').catch(() => {});
+    }
+  });
+
+  // ===========================================================================
   // Navigation
-  // ---------------------------------------------------------------------------
-  function showPage(page) {
+  // ===========================================================================
+  function showPage(page, tab) {
     state.page = page;
-    document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === page));
-    document.querySelectorAll('.page').forEach((p) => p.classList.toggle('hidden', p.id !== `page-${page}`));
+    document.querySelectorAll('.nav-btn[data-page]').forEach((b) => {
+      const same = b.dataset.page === page && (!b.dataset.tab || !tab || b.dataset.tab === tab);
+      b.classList.toggle('active', same && (page !== 'settings' || b.dataset.tab === (tab || 'game')));
+    });
+    document.querySelectorAll('.page').forEach((p) => {
+      const show = p.id === `page-${page}`;
+      if (show && p.classList.contains('hidden')) {
+        p.classList.remove('hidden');
+        p.style.animation = 'none'; void p.offsetWidth; p.style.animation = '';
+      } else if (!show) p.classList.add('hidden');
+    });
+    $('content').scrollTop = 0;
     if (page === 'profile') loadProfile();
-    if (page === 'settings') renderSettings();
+    if (page === 'settings') { showTab(tab || 'game'); renderSettings(); }
     if (page === 'console') $('log-output').scrollTop = $('log-output').scrollHeight;
   }
-  document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => showPage(b.dataset.page)));
+  document.querySelectorAll('.nav-btn[data-page]').forEach((b) => b.addEventListener('click', () => showPage(b.dataset.page, b.dataset.tab)));
+  $('player-head').addEventListener('click', () => showPage('profile'));
+  $('btn-diag-nav').addEventListener('click', () => openDiagnostic());
 
-  // ---------------------------------------------------------------------------
+  function showTab(tab) {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab));
+    document.querySelectorAll('.nav-btn[data-page="settings"]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  }
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+
+  // ===========================================================================
   // Serveurs, canaux, grades
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   const currentServer = () => state.servers.find((s) => s.id === settings.instance) || state.servers[0];
   const roleName = () => (state.account && state.account.role && state.account.role.name) || '';
-
   function roleIn(list) {
     if (!Array.isArray(list) || list.length === 0) return true;
     const r = roleName().toLowerCase();
     return !!r && list.some((x) => String(x).toLowerCase() === r);
   }
-
   function channelAccess(channel) {
     const srv = currentServer() || {};
-    const cfg = (state.config) || {};
+    const cfg = state.config || {};
     const mode = srv.channel || 'both';
     if (channel === 'test') {
       if (mode === 'stable') return { ok: false, why: 'Pas de canal Test pour ce serveur.' };
       const roles = srv.test_roles || cfg.test_roles || [];
-      if (!roleIn(roles)) return { ok: false, why: `Réservé aux grades : ${roles.join(', ')}` };
-      return { ok: true };
+      return roleIn(roles) ? { ok: true } : { ok: false, why: `Canal Test réservé aux grades : ${roles.join(', ')}` };
     }
     if (mode === 'test') return { ok: false, why: 'Ce serveur n’a que le canal Test.' };
     const roles = srv.allowed_roles || cfg.allowed_roles || [];
-    if (!roleIn(roles)) return { ok: false, why: `Réservé aux grades : ${roles.join(', ')}` };
-    return { ok: true };
+    return roleIn(roles) ? { ok: true } : { ok: false, why: `Réservé aux grades : ${roles.join(', ')}` };
+  }
+
+  function artFor(id, kind) {
+    const known = KNOWN_ART.includes(id) ? id : 'geoventure';
+    if (kind === 'bg') return `assets/img/bg_${known}.jpg`;
+    if (kind === 'logo') return KNOWN_ART.includes(id) ? `assets/img/${id}_logo.png` : null;
+    return `assets/img/${known}.jpg`;
+  }
+
+  let lastBg = null;
+  function renderBackground() {
+    const src = artFor(settings.instance, 'bg');
+    if (src === lastBg) return;
+    lastBg = src;
+    const bg = $('backdrop-img');
+    bg.classList.add('swap');
+    const img = new Image();
+    img.onload = () => { bg.style.backgroundImage = cssUrl(src); bg.classList.remove('swap'); };
+    img.onerror = () => bg.classList.remove('swap');
+    img.src = src;
   }
 
   function renderServers() {
@@ -174,52 +210,52 @@
     box.replaceChildren();
     for (const srv of state.servers) {
       const status = state.statuses.find((s) => s.id === srv.id);
+      const logo = artFor(srv.id, 'logo');
+      const color = safeColor(srv.theme_color || srv.color) || '#4ade80';
+      const tip = status && status.online ? `${srv.name} · ${status.players ?? 0} en ligne` : `${srv.name}${status ? ' · hors ligne' : ''}`;
       const btn = el('button', {
-        class: `pill${srv.id === settings.instance ? ' active' : ''}`,
-        role: 'tab',
-        'aria-selected': String(srv.id === settings.instance),
-        title: srv.description || null,
+        class: `server-pill${srv.id === settings.instance ? ' active' : ''}`,
+        role: 'tab', 'aria-selected': String(srv.id === settings.instance), 'aria-label': tip,
+        style: { '--c': color },
         onclick: () => selectInstance(srv.id),
       }, [
-        el('span', { class: 'swatch' }),
-        srv.name || srv.id,
-        status && status.online ? el('span', { class: 'muted small', text: ` ${status.players ?? 0}` }) : null,
+        logo ? el('img', { src: logo, alt: '' }) : el('span', { class: 'initial', text: (srv.name || srv.id).slice(0, 1).toUpperCase() }),
+        el('span', { class: `online-dot${status && status.online ? ' on' : ''}` }),
+        el('span', { class: 'tip', text: tip }),
       ]);
-      const color = safeColor(srv.theme_color || srv.color);
-      btn.querySelector('.swatch').style.background = color || 'var(--muted)';
+      btn.style.setProperty('--c', color);
       box.append(btn);
     }
-    const srv = currentServer();
-    $('server-name').textContent = (srv && srv.name) || 'Geoventure';
-    const accent = safeColor(srv && (srv.theme_color || srv.color));
-    document.documentElement.style.setProperty('--accent', accent || '#4ade80');
+    const srv = currentServer() || {};
+    setAccent(srv.theme_color || srv.color);
+    $('server-name').textContent = srv.name || 'Geoventure';
+    $('server-card-name').textContent = srv.name || 'Geoventure';
+    $('server-card-desc').textContent = srv.description || '';
+    const logo = artFor(srv.id, 'logo');
+    $('server-logo').src = logo || 'assets/img/icon.png';
+    $('server-img').src = artFor(srv.id, 'bg');
+    renderBackground();
   }
 
   function renderChannel() {
     const testAccess = channelAccess('test');
-    if (settings.channel === 'test' && !testAccess.ok) {
-      settings.channel = 'stable';
-      saveSettings();
-    }
-    document.querySelectorAll('#channel-switch .seg').forEach((b) => {
+    if (settings.channel === 'test' && !testAccess.ok) { settings.channel = 'stable'; saveSettings(); }
+    document.querySelectorAll('#channel-switch .channel-pill').forEach((b) => {
       const active = b.dataset.channel === settings.channel;
       b.classList.toggle('active', active);
+      b.classList.toggle('test', b.dataset.channel === 'test');
       b.setAttribute('aria-checked', String(active));
       if (b.dataset.channel === 'test') {
         b.disabled = !testAccess.ok;
-        b.textContent = testAccess.ok ? '🧪 Test' : '🔒 Test';
-        b.title = testAccess.ok ? 'Version de test du modpack (dossier séparé)' : testAccess.why;
-      }
+        b.title = testAccess.ok ? 'Canal Test : modpack de test, dossier séparé' : testAccess.why;
+      } else b.title = 'Canal Stable';
     });
-    $('channel-hint').textContent = settings.channel === 'test'
-      ? 'Canal Test : modpack de test, installé dans un dossier séparé.'
-      : '';
   }
-
-  document.querySelectorAll('#channel-switch .seg').forEach((b) => b.addEventListener('click', () => {
-    if (state.launching || state.gameRunning || b.disabled) return;
+  document.querySelectorAll('#channel-switch .channel-pill').forEach((b) => b.addEventListener('click', () => {
+    if (state.launching || state.gameRunning || b.disabled || settings.channel === b.dataset.channel) return;
     settings.channel = b.dataset.channel;
     saveSettings();
+    toast(settings.channel === 'test' ? '🧪 Canal Test : modpack de test, installé à part.' : 'Canal Stable.');
     loadConfig();
   }));
 
@@ -229,18 +265,13 @@
     saveSettings();
     renderServers();
     renderStatus();
-    loadConfig();
-    loadNotifications();
+    loadConfig().then(() => { loadNotifications(); loadLauncherContent(); });
   }
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Configuration du panel
-  // ---------------------------------------------------------------------------
-  function setBadge(text, cls) {
-    const b = $('status-badge');
-    b.textContent = text;
-    b.className = `badge ${cls || ''}`;
-  }
+  // ===========================================================================
+  function setBadge(text, cls) { const b = $('status-badge'); b.textContent = text; b.className = `badge ${cls || ''}`; }
 
   async function loadConfig() {
     setBadge('Chargement…');
@@ -250,58 +281,39 @@
       state.config = res.config;
       state.offline = !!res.offline;
       mergeServers(res.config.servers);
-      const loader = res.config.loader && res.config.loader.enable && res.config.loader.build
-        ? `${res.config.loader.type} ${res.config.loader.build}`
-        : 'vanilla';
-      $('info-version').textContent = `Minecraft ${res.config.game_version || '1.20.1'} · ${loader}`;
-      $('splash').textContent = res.config.splash || '';
-      if (res.offline) setBadge('Hors ligne (dernière config connue)', 'badge-offline');
-      else if (res.config.maintenance) setBadge('Maintenance', 'badge-offline');
-      else setBadge('Panel en ligne', 'badge-online');
-      renderAlert();
+      const l = res.config.loader;
+      $('info-version').textContent = `Minecraft ${res.config.game_version || '1.20.1'}${l && l.enable && l.build ? ` · Forge ${String(l.build).replace(/^1\.20\.1-/, '')}` : ''}`;
+      $('splash').textContent = res.config.splash ? `« ${stripTags(res.config.splash)} »` : '';
+      if (res.offline) setBadge('Hors ligne · dernière config connue', 'warn');
+      else if (res.config.maintenance) setBadge('Maintenance', 'warn');
+      else setBadge('Panel en ligne', 'ok');
+      $('login-site').textContent = (siteUrl().replace(/^https?:\/\//, '').replace(/\/$/, ''));
     } catch (err) {
       state.config = null;
-      setBadge('Panel injoignable', 'badge-error');
+      setBadge('Panel injoignable', 'err');
       uiLog('error', `Panel injoignable : ${errMsg(err)}`);
     }
     renderServers();
     renderChannel();
-    renderMaintenance();
+    renderAlert();
     updatePlayButton();
   }
 
   function mergeServers(panelServers) {
     if (!Array.isArray(panelServers) || panelServers.length === 0) return;
     const merged = DEFAULT_SERVERS.map((d) => Object.assign({}, d, panelServers.find((p) => p.id === d.id) || {}));
-    for (const p of panelServers) {
-      if (p && p.id && !merged.some((m) => m.id === p.id)) merged.push(p);
-    }
+    for (const p of panelServers) if (p && p.id && !merged.some((m) => m.id === p.id)) merged.push(p);
     state.servers = merged;
   }
 
   function renderAlert() {
     const cfg = state.config || {};
-    const box = $('alert-banner');
-    if (cfg.alert_activate && cfg.alert_msg) {
-      box.textContent = String(cfg.alert_msg).replace(/<[^>]*>/g, '');
-      box.classList.remove('hidden');
-    } else {
-      box.classList.add('hidden');
-    }
+    const alert = $('alert-banner');
+    if (cfg.alert_activate && cfg.alert_msg) { alert.textContent = stripTags(cfg.alert_msg); alert.classList.remove('hidden'); } else alert.classList.add('hidden');
+    const m = $('maintenance-box');
+    if (cfg.maintenance) { m.textContent = `🛠️ ${stripTags(cfg.maintenance_message || 'Maintenance en cours.')}`; m.classList.remove('hidden'); } else m.classList.add('hidden');
   }
 
-  function renderMaintenance() {
-    const cfg = state.config || {};
-    const box = $('maintenance-box');
-    if (cfg.maintenance) {
-      box.textContent = `🛠️ ${String(cfg.maintenance_message || 'Maintenance en cours.').replace(/<[^>]*>/g, '')}`;
-      box.classList.remove('hidden');
-    } else {
-      box.classList.add('hidden');
-    }
-  }
-
-  // Raisons qui empêchent de jouer (affichées sous le bouton).
   function playBlockReason() {
     const cfg = state.config;
     if (!state.account) return 'Connectez-vous pour jouer.';
@@ -310,82 +322,69 @@
     if (cfg.email_verified && !state.account.email_verified) return 'Vérifiez votre adresse e-mail sur le site pour jouer.';
     if (cfg.whitelist_activate) {
       const names = (cfg.whitelist || []).map((n) => String(n).toLowerCase());
-      const okName = names.includes(String(state.account.username).toLowerCase());
-      const okRole = roleIn(cfg.whitelist_roles || []) && (cfg.whitelist_roles || []).length > 0;
-      if (!okName && !okRole) return 'Accès réservé (liste blanche).';
+      const roles = cfg.whitelist_roles || [];
+      if (!names.includes(String(state.account.username).toLowerCase()) && !(roles.length && roleIn(roles))) return 'Accès réservé (liste blanche).';
     }
     const access = channelAccess(settings.channel);
     if (!access.ok) return access.why;
-    if (state.system && state.system.plan && state.system.plan.insufficient) {
-      return `Mémoire insuffisante : il faut au moins 3 Go utilisables (${state.system.plan.cap_gb} Go disponibles).`;
-    }
+    if (state.system && state.system.plan && state.system.plan.insufficient) return `Mémoire insuffisante : 3 Go utilisables minimum (${state.system.plan.cap_gb} Go disponibles).`;
     return '';
   }
 
   function updatePlayButton() {
     const busy = state.launching || state.gameRunning;
     const reason = busy ? '' : playBlockReason();
-    $('btn-play').disabled = busy || !!reason;
-    $('btn-play').textContent = state.launching ? 'Lancement…' : (state.gameRunning ? 'En jeu' : 'Jouer');
+    const btn = $('btn-play');
+    btn.disabled = busy || !!reason;
+    btn.classList.toggle('busy', state.launching);
+    $('play-label').textContent = state.launching ? 'Lancement…' : (state.gameRunning ? 'En jeu' : 'Jouer');
+    btn.title = reason || (state.gameRunning ? 'Le jeu est ouvert' : 'Jouer');
+    $('btn-join').disabled = btn.disabled;
+    $('btn-join').textContent = state.gameRunning ? 'En jeu' : (state.launching ? 'Lancement…' : 'Rejoindre le serveur');
     $('play-block-reason').textContent = reason;
   }
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Statut des serveurs, annonces, événements
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   async function loadStatuses() {
     try {
       const list = await invoke('panel_get', { endpoint: 'utils/servers-status', instance: null, channel: settings.channel });
       state.statuses = Array.isArray(list) ? list : [];
-    } catch (_) {
-      state.statuses = [];
-    }
+    } catch (_) { state.statuses = []; }
     renderServers();
     renderStatus();
   }
 
   function renderStatus() {
-    const box = $('server-status');
-    const text = $('server-status-text');
     const st = state.statuses.find((s) => s.id === settings.instance);
-    box.classList.remove('online', 'offline');
-    if (!st) {
-      text.textContent = 'Statut du serveur inconnu';
-      return;
-    }
-    if (st.online) {
-      box.classList.add('online');
-      const ping = st.latency != null ? ` · ${st.latency} ms` : '';
-      text.textContent = `En ligne · ${st.players ?? 0}/${st.max_players ?? '?'} joueurs${ping}`;
-    } else {
-      box.classList.add('offline');
-      text.textContent = 'Serveur hors ligne';
-    }
+    const dot = $('status-dot');
+    dot.className = `status-dot${st ? (st.online ? ' on' : ' off') : ''}`;
+    $('server-players').textContent = !st ? 'Statut inconnu' : (st.online ? `${st.players ?? 0}/${st.max_players ?? '?'} joueurs` : 'Hors ligne');
+    const lat = $('server-latency');
+    lat.textContent = st && st.online && st.latency != null ? `${st.latency} ms` : '-- ms';
+    lat.className = `chip${st && st.online && st.latency != null ? (st.latency < 80 ? ' good' : st.latency < 180 ? ' mid' : ' bad') : ''}`;
   }
+  $('btn-refresh-status').addEventListener('click', () => loadStatuses());
 
   async function loadNotifications() {
     const box = $('notifications');
     let list = [];
-    try {
-      list = await invoke('panel_get', { endpoint: 'utils/notifications', instance: settings.instance, channel: settings.channel });
-    } catch (_) {}
+    try { list = await invoke('panel_get', { endpoint: 'utils/notifications', instance: settings.instance, channel: settings.channel }); } catch (_) {}
     box.replaceChildren();
     const dismissed = store.get('nexus_rust_dismissed', []);
     const now = Date.now();
     for (const n of Array.isArray(list) ? list : []) {
-      if (!n || dismissed.includes(n.id)) continue;
-      if (n.expiresAt && Number(n.expiresAt) < now) continue;
+      if (!n || dismissed.includes(n.id) || (n.expiresAt && Number(n.expiresAt) < now)) continue;
       const type = ['info', 'warning', 'maintenance', 'event'].includes(n.type) ? n.type : 'info';
-      const icon = { info: 'ℹ️', warning: '⚠️', maintenance: '🛠️', event: '🎉' }[type];
       const item = el('div', { class: `notif ${type}` }, [
-        el('span', { text: icon }),
-        el('span', { class: 'msg', text: String(n.message || '').replace(/<[^>]*>/g, '') }),
+        el('span', { text: { info: 'ℹ️', warning: '⚠️', maintenance: '🛠️', event: '🎉' }[type] }),
+        el('span', { class: 'msg', text: stripTags(n.message) }),
       ]);
-      if (n.url && /^https?:\/\//i.test(n.url)) {
-        item.append(el('button', { class: 'btn-secondary', text: 'En savoir plus', onclick: () => openUrl(n.url) }));
-      }
+      const url = n.url && /^https?:\/\//i.test(n.url) ? n.url : null;
+      if (url) item.append(el('button', { class: 'btn', text: 'En savoir plus', onclick: () => openUrl(url) }));
       item.append(el('button', {
-        class: 'btn-ghost', text: '✕', title: 'Masquer', 'aria-label': 'Masquer l’annonce',
+        class: 'link', text: 'Masquer',
         onclick: () => { dismissed.push(n.id); store.set('nexus_rust_dismissed', dismissed.slice(-200)); item.remove(); },
       }));
       box.append(item);
@@ -397,73 +396,196 @@
     try {
       const list = await invoke('panel_get', { endpoint: 'utils/game-events', instance: null, channel: 'stable' });
       gameEvents = Array.isArray(list) ? list : [];
-    } catch (_) {
-      gameEvents = [];
-    }
+    } catch (_) { gameEvents = []; }
     renderGameEvents();
   }
-
   function formatDuration(ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    const m = Math.floor((s % 3600) / 60);
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
     if (d > 0) return `${d} j ${h} h`;
     if (h > 0) return `${h} h ${m} min`;
     return `${m} min ${s % 60} s`;
   }
-
   function renderGameEvents() {
     const box = $('game-events');
     const now = Date.now();
-    const items = gameEvents
-      .filter((e) => e && e.enabled !== false)
-      .map((e) => {
-        let phase = e.phase;
-        if (phase === 'upcoming' && e.opensAt && e.opensAt <= now) phase = 'open';
-        if (e.endsAt && e.endsAt <= now) phase = 'ended';
-        return Object.assign({}, e, { phase });
-      })
-      .filter((e) => e.phase === 'open' || e.phase === 'upcoming')
-      .sort((a, b) => (a.phase === b.phase ? (a.opensAt || 0) - (b.opensAt || 0) : a.phase === 'open' ? -1 : 1))
-      .slice(0, 2);
-    box.replaceChildren();
+    const items = gameEvents.filter((e) => e && e.enabled !== false).map((e) => {
+      let phase = e.phase;
+      if (phase === 'upcoming' && e.opensAt && e.opensAt <= now) phase = 'open';
+      if (e.endsAt && e.endsAt <= now) phase = 'ended';
+      return Object.assign({}, e, { phase });
+    }).filter((e) => e.phase === 'open' || e.phase === 'upcoming')
+      .sort((a, b) => (a.phase === b.phase ? (a.opensAt || 0) - (b.opensAt || 0) : a.phase === 'open' ? -1 : 1)).slice(0, 2);
     if (items.length === 0) {
-      box.append(el('p', { class: 'muted', text: 'Aucun événement pour le moment.' }));
+      if (!box.querySelector('.empty')) box.replaceChildren(el('p', { class: 'muted small empty', text: 'Aucun événement pour le moment.' }));
       return;
     }
-    for (const e of items) {
-      const when = e.phase === 'open'
-        ? (e.endsAt ? `En cours · se termine dans ${formatDuration(e.endsAt - now)}` : 'En cours')
-        : `Ouvre dans ${formatDuration((e.opensAt || now) - now)}`;
-      box.append(el('div', { class: 'event', dataset: { slug: String(e.slug || '') } }, [
-        el('strong', { text: e.name || e.slug }),
-        el('span', { class: 'muted small', text: when }),
+    box.replaceChildren(...items.map((e) => el('div', { class: 'event', dataset: { slug: String(e.slug || '') } }, [
+      el('strong', { text: `${e.phase === 'open' ? '🔥 ' : '⏳ '}${e.name || e.slug}` }),
+      el('span', { class: 'count', text: e.phase === 'open' ? (e.endsAt ? `En cours · fin dans ${formatDuration(e.endsAt - now)}` : 'En cours') : `Ouvre dans ${formatDuration((e.opensAt || now) - now)}` }),
+    ])));
+  }
+
+  // ===========================================================================
+  // Actualité (flux RSS du site Azuriom) et contenu de l'accueil (panel)
+  // ===========================================================================
+  let heroTimer = null;
+  async function loadNews() {
+    try {
+      state.news = await invoke('fetch_news', { siteUrl: siteUrl() });
+    } catch (err) {
+      state.news = [];
+      uiLog('warn', `Actualité indisponible : ${errMsg(err)}`);
+    }
+    state.heroIndex = 0;
+    renderHero(true);
+    renderNewsList();
+    clearInterval(heroTimer);
+    if (state.news.length > 1) heroTimer = setInterval(() => { if (state.page === 'home') nextHero(1); }, 8000);
+  }
+
+  function formatDate(ts) {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (_) { return ''; }
+  }
+
+  function nextHero(step) {
+    const n = Math.min(state.news.length, 5);
+    if (n < 2) return;
+    state.heroIndex = (state.heroIndex + step + n) % n;
+    renderHero();
+  }
+
+  function renderHero(immediate) {
+    const item = state.news[state.heroIndex];
+    const body = document.querySelector('.hero-body');
+    const bg = $('news-hero-bg');
+    const apply = () => {
+      if (!item) {
+        $('news-hero-title').textContent = 'Aucune actualité pour le moment';
+        $('news-hero-desc').textContent = 'Suivez les nouveautés du serveur ici.';
+        $('news-hero-meta').textContent = '';
+        bg.style.backgroundImage = cssUrl(artFor(settings.instance, 'bg'));
+      } else {
+        $('news-hero-title').textContent = item.title;
+        $('news-hero-desc').textContent = item.summary || '';
+        $('news-hero-meta').textContent = [formatDate(item.timestamp), item.author].filter(Boolean).join(' · ');
+        const img = safeHttps(item.image);
+        bg.style.backgroundImage = img ? cssUrl(img) : cssUrl(artFor(settings.instance, 'bg'));
+      }
+      body.classList.remove('fade');
+      bg.classList.remove('fade');
+    };
+    if (immediate) apply();
+    else { body.classList.add('fade'); bg.classList.add('fade'); setTimeout(apply, 320); }
+
+    const nav = $('news-hero-nav');
+    const n = Math.min(state.news.length, 5);
+    nav.replaceChildren();
+    if (n > 1) {
+      for (let i = 0; i < n; i += 1) {
+        nav.append(el('button', {
+          class: `hero-dot${i === state.heroIndex ? ' active' : ''}`, 'aria-label': `Actualité ${i + 1}`,
+          onclick: (e) => { e.stopPropagation(); state.heroIndex = i; renderHero(); },
+        }));
+      }
+    }
+  }
+  $('news-hero').addEventListener('click', () => { const it = state.news[state.heroIndex]; if (it && it.link) openUrl(it.link); });
+  $('news-hero').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') nextHero(1);
+    if (e.key === 'ArrowLeft') nextHero(-1);
+    if (e.key === 'Enter') { const it = state.news[state.heroIndex]; if (it && it.link) openUrl(it.link); }
+  });
+
+  function renderNewsList() {
+    const box = $('news-list');
+    box.replaceChildren();
+    const items = state.news.slice(0, 6);
+    if (items.length === 0) { box.append(el('p', { class: 'muted small', text: 'Aucune actualité disponible.' })); return; }
+    for (const it of items) {
+      const img = safeHttps(it.image);
+      box.append(el('button', { class: 'news-item', onclick: () => openUrl(it.link) }, [
+        el('div', { class: 'news-thumb', style: img ? { backgroundImage: cssUrl(img) } : null }),
+        el('div', null, [
+          el('strong', { text: it.title }),
+          el('p', { text: it.summary || '' }),
+          el('span', { class: 'date', text: formatDate(it.timestamp) }),
+        ]),
       ]));
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Compte Azuriom
-  // ---------------------------------------------------------------------------
+  async function loadLauncherContent() {
+    let data = null;
+    try { data = await invoke('panel_get', { endpoint: 'utils/launcher-content', instance: settings.instance, channel: 'stable' }); } catch (_) {}
+    const shortcuts = $('shortcuts');
+    shortcuts.replaceChildren();
+    const sc = (data && Array.isArray(data.shortcuts) ? data.shortcuts : []).slice().sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    const mapUrl = state.config && safeHttps(state.config.map_url);
+    if (mapUrl && !sc.some((s) => /carte|map/i.test(String(s.title)) || safeHttps(s.url) === mapUrl)) sc.push({ title: 'Carte', icon: '🗺️', url: mapUrl });
+    for (const s of sc) {
+      const url = safeHttps(s.url);
+      if (!url) continue;
+      shortcuts.append(el('button', { class: 'shortcut', title: s.description || s.title, onclick: () => openUrl(url) }, [
+        el('span', { class: 'shortcut-icon', text: s.icon && [...String(s.icon)].length <= 3 ? s.icon : '🔗' }),
+        el('strong', { text: s.title }),
+      ]));
+    }
+    shortcuts.parentElement.classList.toggle('hidden', shortcuts.childElementCount === 0);
+
+    const disc = $('discover');
+    disc.replaceChildren();
+    const dc = (data && Array.isArray(data.discover) ? data.discover : []).slice().sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    for (const d of dc) {
+      const url = safeHttps(d.url);
+      const img = safeHttps(d.imageUrl);
+      disc.append(el('button', { class: 'discover-card', onclick: () => openUrl(url) }, [
+        el('div', { class: 'discover-bg', style: img ? { backgroundImage: cssUrl(img) } : { backgroundImage: cssUrl(artFor(settings.instance, 'card')) } }),
+        el('div', { class: 'discover-body' }, [el('strong', { text: d.title }), el('span', { text: d.description || '' })]),
+      ]));
+    }
+    disc.classList.toggle('hidden', disc.childElementCount === 0);
+    disc.previousElementSibling.classList.toggle('hidden', disc.childElementCount === 0);
+  }
+
+  // ===========================================================================
+  // Compte Azuriom (connexion via le site)
+  // ===========================================================================
   function siteUrl() {
     const cfg = state.config || {};
     const srv = currentServer() || {};
-    return srv.azauth || cfg.azauth || 'https://geoventure.fr/';
+    const raw = srv.azauth || cfg.azauth || 'https://geoventure.fr/';
+    return /\/$/.test(raw) ? raw : `${raw}/`;
   }
+
+  const AUTH_REASONS = {
+    invalid_credentials: 'E-mail, pseudo ou mot de passe incorrect.',
+    invalid_2fa: 'Code de double authentification incorrect.',
+    invalid_code: 'Code de double authentification incorrect.',
+    banned: 'Ce compte est banni du serveur.',
+    email_not_verified: 'Vérifiez d’abord votre adresse e-mail sur le site.',
+    user_banned: 'Ce compte est banni du serveur.',
+  };
 
   function renderAccount(account) {
     state.account = account;
     $('login-screen').classList.toggle('hidden', !!account);
-    $('account-mini').classList.toggle('hidden', !account);
-    $('btn-logout').classList.toggle('hidden', !account);
     if (account) {
-      $('az-username').textContent = account.username;
+      const avatar = safeHttps(account.skin_url) || 'assets/img/icon.png';
+      $('az-avatar').src = avatar;
+      $('profile-avatar').src = avatar;
+      $('az-avatar').onerror = () => { $('az-avatar').src = 'assets/img/icon.png'; };
+      $('profile-avatar').onerror = () => { $('profile-avatar').src = 'assets/img/icon.png'; };
       $('az-role').textContent = account.role ? account.role.name : 'Joueur';
-      if (account.skin_url && /^https:\/\//.test(account.skin_url)) $('az-avatar').src = account.skin_url;
+      const rc = account.role && safeColor(account.role.color);
+      $('az-role').style.color = rc || '';
+      $('profile-name').textContent = account.username;
+      $('profile-role').textContent = account.role ? account.role.name : 'Joueur';
       $('az-status').textContent = '';
     } else {
       $('az-2fa-wrap').classList.add('hidden');
+      setTimeout(() => $('az-email').focus(), 50);
     }
     renderChannel();
     updatePlayButton();
@@ -472,13 +594,13 @@
   $('az-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const status = $('az-status');
-    status.textContent = 'Connexion…';
+    const btn = $('btn-login');
+    status.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Connexion…';
     try {
       const res = await invoke('azuriom_login', {
-        siteUrl: siteUrl(),
-        email: $('az-email').value.trim(),
-        password: $('az-password').value,
-        code2fa: $('az-2fa').value.trim() || null,
+        siteUrl: siteUrl(), email: $('az-email').value.trim(), password: $('az-password').value, code2fa: $('az-2fa').value.trim() || null,
       });
       if (res.outcome === 'requires2fa') {
         $('az-2fa-wrap').classList.remove('hidden');
@@ -488,61 +610,62 @@
         $('az-password').value = '';
         $('az-2fa').value = '';
         renderAccount(res.account);
+        toast(`Bienvenue, ${res.account.username} !`);
         loadConfig();
       } else {
-        status.textContent = res.message || 'Identifiants refusés.';
+        status.textContent = AUTH_REASONS[res.reason] || res.message || 'Connexion refusée.';
+        shakeLogin();
       }
     } catch (err) {
-      status.textContent = `Connexion impossible : ${errMsg(err)}`;
+      status.textContent = `Le site ne répond pas : ${errMsg(err)}`;
+      shakeLogin();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Se connecter';
     }
   });
-
+  function shakeLogin() { const c = $('az-login-form'); c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake'); }
+  $('link-register').addEventListener('click', () => openUrl(`${siteUrl()}user/register`));
+  $('link-forgot').addEventListener('click', () => openUrl(`${siteUrl()}user/password/reset`));
   $('btn-logout').addEventListener('click', async () => {
+    if (state.launching || state.gameRunning) return toast('Fermez d’abord le jeu.');
     await invoke('azuriom_logout').catch(() => {});
     renderAccount(null);
+    showPage('home');
   });
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Lancement
-  // ---------------------------------------------------------------------------
-  const PHASES = {
-    minecraft: 'Minecraft',
-    assets: 'Ressources du jeu',
-    java: 'Java 17',
-    forge: 'Forge',
-    'forge-patch': 'Patch de Forge',
-    modpack: 'Modpack',
-    launch: 'Lancement',
-  };
+  // ===========================================================================
+  const PHASES = { minecraft: 'Installation de Minecraft', assets: 'Ressources du jeu', java: 'Java 17', forge: 'Installation de Forge', 'forge-patch': 'Patch de Forge', modpack: 'Synchronisation du modpack', launch: 'Lancement de Minecraft' };
 
+  function showDock(show) { $('dock').classList.toggle('hidden', !show); }
   function onInstallProgress(p) {
-    const pct = p.total > 0 ? Math.round((p.completed / p.total) * 100) : 0;
-    $('progress-fill').style.width = `${p.total > 0 ? pct : 0}%`;
-    const name = PHASES[p.phase] || p.label;
-    const count = p.total > 0 ? ` · ${p.completed}/${p.total}` : '';
-    const label = p.phase === 'forge-patch' ? p.label : name;
-    $('progress-text').textContent = `${label}${count}${p.current_file && p.phase !== 'forge-patch' ? ` · ${p.current_file.split('/').pop()}` : ''}`;
+    showDock(true);
+    const fill = $('progress-fill');
+    const pct = p.total > 0 ? Math.round((p.completed / p.total) * 100) : null;
+    fill.classList.toggle('indeterminate', pct === null);
+    if (pct !== null) fill.style.width = `${pct}%`;
+    $('dock-phase').textContent = p.phase === 'forge-patch' ? p.label : (PHASES[p.phase] || p.label);
+    $('dock-pct').textContent = pct !== null ? `${pct} %` : '';
+    const file = p.current_file && p.phase !== 'forge-patch' ? p.current_file.split('/').pop() : '';
+    $('progress-text').textContent = p.total > 0 ? `${p.completed} / ${p.total}${file ? ` · ${file}` : ''}` : 'Vérification…';
   }
 
   function launchRam() {
     const plan = (state.system && state.system.plan) || {};
     const cfg = state.config || {};
     const max = settings.ramMax || plan.ram_max_gb || cfg.ram_max || 4;
-    const min = Math.min(settings.ramMin || plan.ram_min_gb || cfg.ram_min || 2, max);
-    return { min, max };
+    return { min: Math.min(settings.ramMin || plan.ram_min_gb || cfg.ram_min || 2, max), max };
   }
-
   function launchJvmArgs() {
     if (Array.isArray(settings.jvmArgs)) return settings.jvmArgs;
-    const plan = (state.system && state.system.plan) || {};
-    return plan.jvm_args || [];
+    return ((state.system && state.system.plan) || {}).jvm_args || [];
   }
 
   async function applyOptionalModDefaults() {
     let data;
-    try {
-      data = await invoke('panel_get', { endpoint: 'utils/mods', instance: settings.instance, channel: settings.channel });
-    } catch (_) { return; }
+    try { data = await invoke('panel_get', { endpoint: 'utils/mods', instance: settings.instance, channel: settings.channel }); } catch (_) { return; }
     const list = (data && data.optionalMods) || [];
     const meta = (data && data.mods) || {};
     const key = `${settings.instance}:${settings.channel}`;
@@ -551,77 +674,13 @@
       if (Object.prototype.hasOwnProperty.call(saved, file)) continue;
       const recommended = !!(meta[file] && meta[file].recommanded);
       if (!recommended) {
-        await invoke('set_optional_mod', {
-          dataDirectory: state.config.dataDirectory, instance: settings.instance, channel: settings.channel, file, enabled: false,
-        }).catch(() => {});
+        await invoke('set_optional_mod', { dataDirectory: state.config.dataDirectory, instance: settings.instance, channel: settings.channel, file, enabled: false }).catch(() => {});
       }
       saved[file] = recommended;
     }
     settings.optionalMods[key] = saved;
     saveSettings();
   }
-
-  $('btn-play').addEventListener('click', async () => {
-    if (state.launching || playBlockReason()) return;
-    const cfg = state.config;
-    const srv = currentServer() || {};
-    state.launching = true;
-    updatePlayButton();
-    $('progress-fill').style.width = '0%';
-    $('progress-text').textContent = 'Préparation…';
-    try {
-      await applyOptionalModDefaults();
-      const ram = launchRam();
-      const isTest = settings.channel === 'test';
-      const host = isTest ? (srv.test_ip || srv.ip) : (srv.ip || (cfg.status && cfg.status.ip));
-      const portRaw = isTest ? (srv.test_port || srv.port) : (srv.port || (cfg.status && cfg.status.port));
-      const port = Number.parseInt(portRaw, 10);
-      let width = null;
-      let height = null;
-      if (settings.resolution && settings.resolution !== 'auto') {
-        [width, height] = settings.resolution.split('x').map((n) => Number.parseInt(n, 10));
-      }
-      const extraIgnored = Array.isArray(cfg.ignored) ? cfg.ignored : Object.values(cfg.ignored || {});
-      // La commande répond tout de suite ; le résultat arrive par « launcher://launch-result ».
-      const result = new Promise((resolve, reject) => { pendingLaunch = { resolve, reject }; });
-      await invoke('launch_instance', {
-        req: {
-          data_directory: cfg.dataDirectory || 'Nexus',
-          instance: settings.instance,
-          channel: settings.channel,
-          mc_version: cfg.game_version || '1.20.1',
-          loader_build: (cfg.loader && cfg.loader.build) || '1.20.1-47.4.28',
-          loader_type: (cfg.loader && cfg.loader.type) || 'forge',
-          loader_enable: cfg.loader ? cfg.loader.enable !== false : true,
-          custom_java_path: settings.javaPath || null,
-          username: state.account.username,
-          uuid: state.account.uuid,
-          access_token: state.account.access_token,
-          ram_min_gb: ram.min,
-          ram_max_gb: ram.max,
-          extra_jvm_args: launchJvmArgs(),
-          ignored: extraIgnored.map(String),
-          server_host: settings.joinServer && host ? String(host) : null,
-          server_port: settings.joinServer && Number.isFinite(port) ? port : null,
-          width,
-          height,
-          after_launch: settings.afterLaunch,
-        },
-      });
-      const pid = await result;
-      $('progress-fill').style.width = '100%';
-      $('progress-text').textContent = `Minecraft est lancé (PID ${pid}). Bon jeu !`;
-      state.gameRunning = true;
-      recordLaunch();
-    } catch (err) {
-      $('progress-text').textContent = `Échec : ${errMsg(err)}`;
-      toast(`Le lancement a échoué : ${errMsg(err)}`);
-    } finally {
-      pendingLaunch = null;
-      state.launching = false;
-      updatePlayButton();
-    }
-  });
 
   let pendingLaunch = null;
   function onLaunchResult(r) {
@@ -630,340 +689,380 @@
     else pendingLaunch.reject((r && r.error) || new Error('Lancement impossible'));
   }
 
-  // ---------------------------------------------------------------------------
-  // Succès (compteurs locaux + catalogue du panel)
-  // ---------------------------------------------------------------------------
+  async function play(joinServer) {
+    if (state.launching || state.gameRunning || playBlockReason()) return;
+    const cfg = state.config;
+    const srv = currentServer() || {};
+    state.launching = true;
+    updatePlayButton();
+    onInstallProgress({ phase: 'minecraft', label: 'Préparation', completed: 0, total: 0, current_file: '' });
+    $('dock-phase').textContent = 'Préparation…';
+    try {
+      await applyOptionalModDefaults();
+      const ram = launchRam();
+      const isTest = settings.channel === 'test';
+      const host = isTest ? (srv.test_ip || srv.ip) : (srv.ip || (cfg.status && cfg.status.ip));
+      const port = Number.parseInt(isTest ? (srv.test_port || srv.port) : (srv.port || (cfg.status && cfg.status.port)), 10);
+      let width = null, height = null;
+      if (settings.resolution && settings.resolution !== 'auto') [width, height] = settings.resolution.split('x').map((n) => Number.parseInt(n, 10));
+      const ignored = Array.isArray(cfg.ignored) ? cfg.ignored : Object.values(cfg.ignored || {});
+      const result = new Promise((resolve, reject) => { pendingLaunch = { resolve, reject }; });
+      await invoke('launch_instance', {
+        req: {
+          data_directory: cfg.dataDirectory || 'Nexus', instance: settings.instance, channel: settings.channel,
+          mc_version: cfg.game_version || '1.20.1', loader_build: (cfg.loader && cfg.loader.build) || '1.20.1-47.4.28',
+          loader_type: (cfg.loader && cfg.loader.type) || 'forge', loader_enable: cfg.loader ? cfg.loader.enable !== false : true,
+          custom_java_path: settings.javaPath || null,
+          username: state.account.username, uuid: state.account.uuid, access_token: state.account.access_token,
+          ram_min_gb: ram.min, ram_max_gb: ram.max, extra_jvm_args: launchJvmArgs(), ignored: ignored.map(String),
+          server_host: joinServer && host ? String(host) : null, server_port: joinServer && Number.isFinite(port) ? port : null,
+          width, height, after_launch: settings.afterLaunch,
+        },
+      });
+      const pid = await result;
+      state.gameRunning = true;
+      $('dock-phase').textContent = '🎮 Minecraft est lancé, bon jeu !';
+      $('dock-pct').textContent = '';
+      $('progress-fill').classList.remove('indeterminate');
+      $('progress-fill').style.width = '100%';
+      $('progress-text').textContent = `Processus ${pid}`;
+      setTimeout(() => showDock(false), 6000);
+      recordLaunch();
+    } catch (err) {
+      showDock(false);
+      toast(`Le lancement a échoué : ${errMsg(err)}`);
+      uiLog('error', errMsg(err));
+    } finally {
+      pendingLaunch = null;
+      state.launching = false;
+      updatePlayButton();
+    }
+  }
+  $('btn-play').addEventListener('click', () => play(settings.joinServer));
+  $('btn-join').addEventListener('click', () => play(true));
+
+  function onGameExit(code) {
+    state.gameRunning = false;
+    updatePlayButton();
+    if (state.gameStartedAt) {
+      const minutes = Math.round((Date.now() - state.gameStartedAt) / 60000);
+      stats.playtime_minutes += minutes;
+      state.gameStartedAt = null;
+      saveStats();
+      checkAchievements(true);
+      if (code != null && code !== 0 && minutes < 30) {
+        $('crash-text').textContent = `Minecraft s’est arrêté avec le code ${code}. Le diagnostic rassemble les journaux utiles (sans données personnelles) pour comprendre ce qui s’est passé.`;
+        $('crash-overlay').classList.remove('hidden');
+      }
+    }
+  }
+  $('crash-close').addEventListener('click', () => $('crash-overlay').classList.add('hidden'));
+  $('crash-console').addEventListener('click', () => { $('crash-overlay').classList.add('hidden'); showPage('console'); });
+  $('crash-diag').addEventListener('click', () => { $('crash-overlay').classList.add('hidden'); openDiagnostic(); });
+
+  // ===========================================================================
+  // Succès
+  // ===========================================================================
   function recordLaunch() {
     stats.launch_count += 1;
     if (!stats.first_launch) stats.first_launch = Date.now();
-    const inst = `${settings.instance}`;
-    if (!stats.instances.includes(inst)) stats.instances.push(inst);
+    if (!stats.instances.includes(settings.instance)) stats.instances.push(settings.instance);
     state.gameStartedAt = Date.now();
     saveStats();
     checkAchievements(true);
   }
-
-  function onGameExit() {
-    state.gameRunning = false;
-    updatePlayButton();
-    if (state.gameStartedAt) {
-      stats.playtime_minutes += Math.round((Date.now() - state.gameStartedAt) / 60000);
-      state.gameStartedAt = null;
-      saveStats();
-      checkAchievements(true);
-    }
-    $('progress-text').textContent = 'Partie terminée.';
-  }
-
   function achievementProgress(a) {
     const target = Number(a.condition_value) || 1;
-    let value = 0;
+    let value;
     switch (a.condition_type) {
-      case 'first_launch': value = stats.launch_count > 0 ? 1 : 0; break;
+      case 'first_launch': return { value: stats.launch_count > 0 ? 1 : 0, target: 1, done: stats.launch_count > 0 };
       case 'launch_count': value = stats.launch_count; break;
       case 'playtime_hours': value = Math.floor(stats.playtime_minutes / 60); break;
       case 'instances_tried': value = stats.instances.length; break;
-      default: return { value: 0, target, done: stats.unlocked.includes(a.code) };
+      default: return { value: 0, target, done: stats.unlocked.includes(a.code), manual: true };
     }
-    const tgt = a.condition_type === 'first_launch' ? 1 : target;
-    return { value: Math.min(value, tgt), target: tgt, done: value >= tgt };
+    return { value: Math.min(value, target), target, done: value >= target };
   }
-
   function checkAchievements(notify) {
     for (const a of state.achievements) {
-      const p = achievementProgress(a);
-      if (p.done && !stats.unlocked.includes(a.code)) {
+      if (achievementProgress(a).done && !stats.unlocked.includes(a.code)) {
         stats.unlocked.push(a.code);
-        if (notify) toast(`🏆 Succès débloqué : ${a.name}`);
+        if (notify) toast(`🏆 Succès débloqué : ${a.name} (+${a.points || 0} pts)`);
       }
     }
     saveStats();
   }
-
-  const BI_ICONS = {
-    'bi-star-fill': '⭐', 'bi-star': '⭐', 'bi-arrow-repeat': '🔁', 'bi-hourglass-split': '⏳', 'bi-hourglass': '⏳',
-    'bi-trophy': '🏆', 'bi-trophy-fill': '🏆', 'bi-map': '🗺️', 'bi-controller': '🎮', 'bi-rocket': '🚀',
-    'bi-rocket-takeoff': '🚀', 'bi-fire': '🔥', 'bi-gem': '💎', 'bi-heart': '❤️', 'bi-heart-fill': '❤️',
-    'bi-clock': '🕒', 'bi-clock-history': '🕒', 'bi-people': '👥', 'bi-people-fill': '👥', 'bi-flag': '🚩',
-    'bi-compass': '🧭', 'bi-calendar': '📅', 'bi-calendar-check': '📅', 'bi-lightning': '⚡', 'bi-lightning-fill': '⚡',
-    'bi-shield': '🛡️', 'bi-shield-fill': '🛡️', 'bi-award': '🏅', 'bi-award-fill': '🏅', 'bi-globe': '🌍',
-    'bi-moon': '🌙', 'bi-sun': '☀️', 'bi-play-fill': '▶️', 'bi-box': '📦', 'bi-diagram-3': '🧩',
+  const BI = {
+    'bi-star-fill': '⭐', 'bi-star': '⭐', 'bi-arrow-repeat': '🔁', 'bi-hourglass-split': '⏳', 'bi-hourglass': '⏳', 'bi-trophy': '🏆',
+    'bi-trophy-fill': '🏆', 'bi-map': '🗺️', 'bi-controller': '🎮', 'bi-rocket': '🚀', 'bi-rocket-takeoff': '🚀', 'bi-fire': '🔥',
+    'bi-gem': '💎', 'bi-heart': '❤️', 'bi-clock': '🕒', 'bi-people': '👥', 'bi-people-fill': '👥', 'bi-flag': '🚩', 'bi-flag-fill': '🚩',
+    'bi-compass': '🧭', 'bi-calendar': '📅', 'bi-lightning': '⚡', 'bi-lightning-fill': '⚡', 'bi-shield': '🛡️', 'bi-shield-fill': '🛡️',
+    'bi-award': '🏅', 'bi-globe': '🌍', 'bi-globe2': '🌍', 'bi-moon': '🌙', 'bi-sun': '☀️', 'bi-box': '📦', 'bi-camera': '📷',
+    'bi-crosshair': '🎯', 'bi-bug': '🐛', 'bi-tree': '🌳', 'bi-gear': '⚙️', 'bi-hammer': '🔨', 'bi-bank': '🏛️', 'bi-cash': '💰',
   };
-  function iconFor(a) {
-    const raw = typeof a.icon === 'string' ? a.icon.trim() : '';
-    if (raw.startsWith('bi-')) return BI_ICONS[raw] || '🏆';
-    if (raw && [...raw].length <= 3) return raw;
-    return '🏆';
-  }
+  const iconFor = (a) => { const r = typeof a.icon === 'string' ? a.icon.trim() : ''; return r.startsWith('bi-') ? (BI[r] || '🏆') : (r && [...r].length <= 3 ? r : '🏆'); };
 
   async function loadAchievements() {
     try {
       const list = await invoke('panel_get', { endpoint: 'utils/achievements', instance: null, channel: 'stable' });
       state.achievements = Array.isArray(list) ? list : [];
-    } catch (_) {
-      state.achievements = [];
-    }
+    } catch (_) { state.achievements = []; }
     checkAchievements(false);
   }
-
   function renderAchievements() {
     const box = $('achievements');
     box.replaceChildren();
-    if (state.achievements.length === 0) {
-      box.append(el('p', { class: 'muted', text: 'Aucun succès disponible.' }));
-      $('ach-score').textContent = '';
-      return;
-    }
+    $('stat-launches').textContent = fmtNum(stats.launch_count);
+    $('stat-playtime').textContent = `${Math.floor(stats.playtime_minutes / 60)} h`;
+    if (state.achievements.length === 0) { box.append(el('p', { class: 'muted', text: 'Aucun succès disponible.' })); $('ach-score').textContent = '0'; return; }
     let points = 0;
-    let total = 0;
-    for (const a of state.achievements) {
+    const sorted = state.achievements.slice().sort((a, b) => Number(achievementProgress(b).done) - Number(achievementProgress(a).done));
+    for (const a of sorted) {
       const p = achievementProgress(a);
-      const unlocked = p.done || stats.unlocked.includes(a.code);
-      total += Number(a.points) || 0;
+      const unlocked = p.done;
       if (unlocked) points += Number(a.points) || 0;
       const hidden = a.secret && !unlocked;
-      const bar = el('div', { class: 'bar' }, el('div'));
-      bar.firstChild.style.width = `${Math.round((p.value / (p.target || 1)) * 100)}%`;
-      box.append(el('div', { class: `ach${unlocked ? ' unlocked' : ''}` }, [
+      const rarity = ['rare', 'epic', 'legendary'].includes(a.rarity) ? ` ${a.rarity}` : '';
+      const bar = !unlocked && !hidden && !p.manual ? el('div', { class: 'bar' }, el('div', { class: 'bar-fill', style: { width: `${Math.round((p.value / (p.target || 1)) * 100)}%` } })) : null;
+      box.append(el('div', { class: `ach${unlocked ? ' unlocked' : ''}${rarity}` }, [
         el('div', { class: 'icon', text: hidden ? '❔' : iconFor(a) }),
         el('div', null, [
           el('strong', { text: hidden ? 'Succès secret' : a.name }),
           el('div', { class: 'desc', text: hidden ? 'À découvrir…' : (a.description || '') }),
-          el('div', { class: 'meta', text: `${a.points || 0} pts${a.category ? ` · ${a.category}` : ''}${!unlocked && a.condition_type !== 'manual' && !hidden ? ` · ${p.value}/${p.target}` : ''}` }),
-          unlocked || hidden || a.condition_type === 'manual' ? null : bar,
+          el('div', { class: 'meta', text: `${a.points || 0} pts${a.category ? ` · ${a.category}` : ''}${bar ? ` · ${p.value}/${p.target}` : ''}${p.manual && !unlocked && !hidden ? ' · en jeu' : ''}` }),
+          bar,
         ]),
       ]));
     }
-    $('ach-score').textContent = `${points} / ${total} pts`;
+    $('ach-score').textContent = fmtNum(points);
   }
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Profil : classement, saison, factions
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   let leaderboardTimer = null;
+  let lastRanks = {};
   async function loadProfile() {
     await loadAchievements();
     renderAchievements();
-    loadLeaderboard();
-    loadSeason();
-    loadFactions();
+    loadLeaderboard(); loadSeason(); loadFactions();
     clearInterval(leaderboardTimer);
-    leaderboardTimer = setInterval(() => {
-      if (state.page === 'profile') loadLeaderboard();
-      else clearInterval(leaderboardTimer);
-    }, 30000);
+    leaderboardTimer = setInterval(() => { if (state.page === 'profile') loadLeaderboard(); else clearInterval(leaderboardTimer); }, 30000);
   }
-
-  function formatNumber(n) {
-    return Number.isFinite(Number(n)) ? Number(n).toLocaleString('fr-FR') : String(n ?? '');
-  }
-
   async function loadLeaderboard() {
     const box = $('leaderboard');
     let list = [];
-    try {
-      list = await invoke('panel_get', { endpoint: 'utils/leaderboards', instance: settings.instance, channel: 'stable' });
-    } catch (_) {}
+    try { list = await invoke('panel_get', { endpoint: 'utils/leaderboards', instance: settings.instance, channel: 'stable' }); } catch (_) {}
     box.replaceChildren();
-    if (!Array.isArray(list) || list.length === 0) {
-      box.append(el('li', { class: 'muted', text: 'Pas encore de classement.' }));
-      return;
-    }
+    if (!Array.isArray(list) || list.length === 0) { box.append(el('li', { class: 'muted', text: 'Pas encore de classement.' })); return; }
     const me = state.account ? String(state.account.username).toLowerCase() : '';
+    const ranks = {};
     for (const row of list.slice(0, 20)) {
       const value = row.coins ?? row.points ?? row.score ?? row.value ?? '';
-      box.append(el('li', { class: String(row.name || '').toLowerCase() === me ? 'me' : null }, [
-        el('span', { class: 'rank', text: `#${row.rank ?? ''}` }),
-        el('span', { class: 'name', text: row.name || '?' }),
-        el('span', { class: 'muted', text: formatNumber(value) }),
+      const name = String(row.name || '?');
+      ranks[name] = row.rank;
+      const moved = lastRanks[name] != null && lastRanks[name] !== row.rank;
+      box.append(el('li', { class: `${name.toLowerCase() === me ? 'me' : ''}${moved ? ' flash' : ''}` }, [
+        el('span', { class: 'rank', text: `#${row.rank ?? ''}` }), el('span', { class: 'name', text: name }), el('span', { class: 'muted', text: fmtNum(value) }),
       ]));
     }
+    lastRanks = ranks;
   }
-
   async function loadSeason() {
     const box = $('season');
     let data = null;
-    try {
-      data = await invoke('panel_get', { endpoint: 'utils/seasons', instance: settings.instance, channel: 'stable' });
-    } catch (_) {}
+    try { data = await invoke('panel_get', { endpoint: 'utils/seasons', instance: settings.instance, channel: 'stable' }); } catch (_) {}
     box.replaceChildren();
     const cur = data && data.current;
-    if (!cur) {
-      box.append(el('p', { class: 'muted', text: 'Pas de saison en cours.' }));
-      return;
-    }
-    const ends = cur.endsAt ? ` · se termine dans ${formatDuration(cur.endsAt - Date.now())}` : '';
-    box.append(el('p', null, [el('strong', { text: cur.name || 'Saison' }), el('span', { class: 'muted small', text: ends })]));
+    if (!cur) { box.append(el('p', { class: 'muted small', text: 'Pas de saison en cours.' })); return; }
+    box.append(el('p', null, [el('strong', { text: cur.name || 'Saison' }), el('span', { class: 'muted small', text: cur.endsAt ? ` · fin dans ${formatDuration(cur.endsAt - Date.now())}` : '' })]));
     const ol = el('ol', { class: 'leaderboard' });
     (cur.standings || []).slice(0, 10).forEach((s, i) => ol.append(el('li', null, [
-      el('span', { class: 'rank', text: `#${i + 1}` }),
-      el('span', { class: 'name', text: s.name || '?' }),
-      el('span', { class: 'muted', text: `${formatNumber(s.points)} pts` }),
+      el('span', { class: 'rank', text: `#${i + 1}` }), el('span', { class: 'name', text: s.name || '?' }), el('span', { class: 'muted', text: `${fmtNum(s.points)} pts` }),
     ])));
     box.append(ol);
   }
-
   async function loadFactions() {
     const body = $('factions');
     let list = [];
-    try {
-      list = await invoke('panel_get', { endpoint: 'utils/factions', instance: settings.instance, channel: 'stable' });
-    } catch (_) {}
+    try { list = await invoke('panel_get', { endpoint: 'utils/factions', instance: settings.instance, channel: 'stable' }); } catch (_) {}
     body.replaceChildren();
-    if (!Array.isArray(list) || list.length === 0) {
-      body.append(el('tr', null, el('td', { colspan: '3', class: 'muted', text: 'Aucune faction.' })));
-      return;
-    }
+    if (!Array.isArray(list) || list.length === 0) { body.append(el('tr', null, el('td', { colspan: '3', class: 'muted', text: 'Aucune faction.' }))); return; }
     for (const f of list.slice(0, 15)) {
       body.append(el('tr', null, [
-        el('td', { text: f.tag && f.tag !== f.name ? `${f.name} [${f.tag}]` : f.name }),
-        el('td', { text: formatNumber(f.members) }),
-        el('td', { text: formatNumber(f.power) }),
+        el('td', { text: f.tag && f.tag !== f.name ? `${f.name} [${f.tag}]` : f.name }), el('td', { text: fmtNum(f.members) }), el('td', { text: fmtNum(f.power) }),
       ]));
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Réglages
-  // ---------------------------------------------------------------------------
-  async function loadSystem(profile) {
-    try {
-      state.system = await invoke('get_system_overview', { profile: profile || settings.profile || null });
-    } catch (_) {
-      state.system = null;
-    }
+  // ===========================================================================
+  // Performances (RAM adaptée au PC)
+  // ===========================================================================
+  async function loadSystem() {
+    try { state.system = await invoke('get_system_overview', { profile: settings.profile || null }); } catch (_) { state.system = null; }
     const ram = launchRam();
     $('info-ram').textContent = `${ram.min}–${ram.max} Go`;
+    const prof = settings.profile || (state.system && state.system.recommended_profile);
+    $('info-profile').textContent = settings.ramMin || settings.jvmArgs ? 'Personnalisé' : (PROFILE_NAMES[prof] || '—');
     updatePlayButton();
   }
 
+  async function renderPerformance() {
+    await loadSystem();
+    const sys = state.system;
+    if (!sys) return;
+    $('hw-cpu').textContent = `${sys.cpu_name || 'Processeur'} · ${sys.cpu_cores} cœurs`;
+    $('hw-ram').textContent = `${sys.total_ram_gb} Go (jeu : ${sys.plan.cap_gb} Go max)`;
+    $('hw-free').textContent = `${sys.free_ram_gb} Go`;
+    $('hw-os').textContent = sys.os;
+    const rec = sys.recommended_profile;
+    $('optimize-text').textContent = `Profil conseillé pour ce PC : ${PROFILE_NAMES[rec]}. Le jeu n’utilisera jamais plus de 60 % de la mémoire (${sys.plan.cap_gb} Go).`;
+
+    const ids = ['eco', 'balanced', 'performance'];
+    const plans = await Promise.all(ids.map((id) => invoke('get_system_overview', { profile: id }).then((s) => s.plan).catch(() => null)));
+    ids.forEach((id, i) => { state.plans[id] = plans[i]; });
+    const active = settings.profile || rec;
+    document.querySelectorAll('.profile-card').forEach((c) => {
+      const id = c.dataset.profile;
+      const plan = state.plans[id];
+      c.classList.toggle('active', id === active && !settings.ramMin);
+      c.querySelector('.tag')?.remove();
+      if (id === rec) c.append(el('span', { class: 'tag', text: 'Conseillé' }));
+      c.querySelector('.pc-ram').textContent = plan ? (plan.insufficient ? 'Mémoire insuffisante' : `${plan.ram_min_gb}–${plan.ram_max_gb} Go`) : '';
+    });
+    const ram = launchRam();
+    const warn = $('perf-warning');
+    if (sys.plan.insufficient) {
+      warn.textContent = '⚠️ Ce PC n’a pas assez de mémoire pour le modpack (3 Go utilisables minimum).';
+      warn.classList.remove('hidden');
+    } else if (sys.free_ram_gb < ram.max) {
+      warn.textContent = `⚠️ Seulement ${sys.free_ram_gb} Go de mémoire libre pour ${ram.max} Go demandés : fermez des applications (navigateur, Discord…) avant de jouer pour éviter les ralentissements.`;
+      warn.classList.remove('hidden');
+    } else warn.classList.add('hidden');
+    $('profile-hint').textContent = settings.ramMin || settings.jvmArgs ? '· réglages personnalisés' : `· profil ${PROFILE_NAMES[active]}`;
+    renderRam();
+    $('jvm-args').value = launchJvmArgs().join('\n');
+  }
+
   function renderRam() {
-    const sys = state.system || { plan: {} };
+    const sys = state.system || { plan: {}, total_ram_gb: 8 };
     const cap = Math.max(1, sys.plan.cap_gb || 8);
     const ram = launchRam();
-    for (const id of ['ram-min', 'ram-max']) $(id).max = String(cap);
+    $('ram-min').max = String(cap);
+    $('ram-max').max = String(cap);
     $('ram-min').value = String(Math.min(ram.min, cap));
     $('ram-max').value = String(Math.min(ram.max, cap));
     $('ram-min-val').textContent = `${$('ram-min').value} Go`;
     $('ram-max-val').textContent = `${$('ram-max').value} Go`;
+    $('ram-bar').style.width = `${Math.min(100, (Number($('ram-max').value) / (sys.total_ram_gb || 8)) * 100)}%`;
+    $('ram-bar-text').textContent = `${$('ram-max').value} / ${sys.total_ram_gb} Go`;
     $('info-ram').textContent = `${ram.min}–${ram.max} Go`;
   }
 
-  async function renderSettings() {
-    await loadSystem();
-    const sys = state.system;
-    if (sys) {
-      $('hw-summary').textContent = `${sys.total_ram_gb} Go de mémoire, ${sys.cpu_cores} cœurs · profil conseillé : ${({ eco: 'Économe', balanced: 'Équilibré', performance: 'Performant' })[sys.recommended_profile]}. Le jeu n’utilisera jamais plus de ${sys.plan.cap_gb} Go (60 %).`;
-    }
-    const active = settings.profile || (sys && sys.recommended_profile);
-    document.querySelectorAll('#profile-switch .seg').forEach((b) => {
-      b.classList.toggle('active', b.dataset.profile === active);
-      b.setAttribute('aria-checked', String(b.dataset.profile === active));
-    });
-    $('profile-hint').textContent = sys && sys.plan.insufficient
-      ? '⚠️ Pas assez de mémoire pour le modpack (3 Go minimum utilisables).'
-      : (settings.ramMin || settings.jvmArgs ? 'Réglages personnalisés.' : 'Réglages du profil appliqués.');
+  async function applyProfile(id, message) {
+    settings.profile = id;
+    settings.ramMin = null; settings.ramMax = null; settings.jvmArgs = null;
+    saveSettings();
+    await renderPerformance();
+    const ram = launchRam();
+    toast(message || `Profil ${PROFILE_NAMES[id]} appliqué : ${ram.min}–${ram.max} Go.`);
+  }
+  document.querySelectorAll('.profile-card').forEach((c) => c.addEventListener('click', () => applyProfile(c.dataset.profile)));
+  $('btn-optimize').addEventListener('click', async () => {
+    const sys = state.system || await invoke('get_system_overview', { profile: null }).catch(() => null);
+    if (!sys) return toast('Impossible de lire le matériel du PC.');
+    const rec = sys.recommended_profile;
+    await applyProfile(rec, `⚡ Optimisé pour votre PC : profil ${PROFILE_NAMES[rec]}.`);
+    const ram = launchRam();
+    toast(`⚡ Optimisé pour votre PC (${sys.total_ram_gb} Go, ${sys.cpu_cores} cœurs) : profil ${PROFILE_NAMES[rec]}, ${ram.min}–${ram.max} Go.`);
+  });
+  function onRamInput(which) {
+    if (which === 'min' && Number($('ram-min').value) > Number($('ram-max').value)) $('ram-max').value = $('ram-min').value;
+    if (which === 'max' && Number($('ram-max').value) < Number($('ram-min').value)) $('ram-min').value = $('ram-max').value;
+    settings.ramMin = Number($('ram-min').value);
+    settings.ramMax = Number($('ram-max').value);
+    saveSettings();
+    document.querySelectorAll('.profile-card').forEach((c) => c.classList.remove('active'));
+    $('profile-hint').textContent = '· réglages personnalisés';
+    $('info-profile').textContent = 'Personnalisé';
     renderRam();
-    $('jvm-args').value = launchJvmArgs().join('\n');
+  }
+  $('ram-min').addEventListener('input', () => onRamInput('min'));
+  $('ram-max').addEventListener('input', () => onRamInput('max'));
+  $('jvm-args').addEventListener('change', () => {
+    settings.jvmArgs = $('jvm-args').value.split('\n').map((s) => s.trim()).filter((s) => s.startsWith('-') && !/^-Xm[sx]/i.test(s));
+    saveSettings();
+    toast('Arguments Java enregistrés.');
+  });
+
+  // ===========================================================================
+  // Réglages
+  // ===========================================================================
+  async function renderSettings() {
+    renderPerformance();
     $('resolution').value = settings.resolution;
     $('after-launch').value = settings.afterLaunch;
-
-    // Java détectés
+    $('join-server').checked = !!settings.joinServer;
+    $('reduce-motion').checked = !!settings.reduceMotion;
+    renderOptionalMods();
+    try { const p = await invoke('get_panel_url'); $('panel-url').value = p.current === p.default ? '' : p.current; } catch (_) {}
     const sel = $('java-select');
-    const cfg = state.config || {};
     try {
-      const jdks = await invoke('detect_jdks', { dataDirectory: cfg.dataDirectory || 'Nexus' });
-      sel.replaceChildren(el('option', { value: '', text: 'Automatique (Java 17 fourni)' }));
+      const jdks = await invoke('detect_jdks', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus' });
+      sel.replaceChildren(el('option', { value: '', text: 'Automatique (Java 17 fourni par le launcher)' }));
       for (const j of jdks) sel.append(el('option', { value: j.path, text: `${j.label} — ${j.path}` }));
     } catch (_) {}
-    if (settings.javaPath && ![...sel.options].some((o) => o.value === settings.javaPath)) {
-      sel.append(el('option', { value: settings.javaPath, text: settings.javaPath }));
-    }
+    if (settings.javaPath && ![...sel.options].some((o) => o.value === settings.javaPath)) sel.append(el('option', { value: settings.javaPath, text: settings.javaPath }));
     sel.value = settings.javaPath || '';
-    renderOptionalMods();
   }
-
-  document.querySelectorAll('#profile-switch .seg').forEach((b) => b.addEventListener('click', async () => {
-    settings.profile = b.dataset.profile;
-    settings.ramMin = null;
-    settings.ramMax = null;
-    settings.jvmArgs = null;
-    saveSettings();
-    await renderSettings();
-    toast('Profil de performance appliqué.');
-  }));
-
-  $('ram-min').addEventListener('input', () => {
-    if (Number($('ram-min').value) > Number($('ram-max').value)) $('ram-max').value = $('ram-min').value;
-    settings.ramMin = Number($('ram-min').value);
-    settings.ramMax = Number($('ram-max').value);
-    saveSettings();
-    renderRam();
-  });
-  $('ram-max').addEventListener('input', () => {
-    if (Number($('ram-max').value) < Number($('ram-min').value)) $('ram-min').value = $('ram-max').value;
-    settings.ramMin = Number($('ram-min').value);
-    settings.ramMax = Number($('ram-max').value);
-    saveSettings();
-    renderRam();
-  });
-  $('jvm-args').addEventListener('change', () => {
-    const args = $('jvm-args').value.split('\n').map((s) => s.trim()).filter((s) => s.startsWith('-') && !/^-Xm[sx]/i.test(s));
-    settings.jvmArgs = args;
-    saveSettings();
-  });
   $('java-select').addEventListener('change', () => { settings.javaPath = $('java-select').value; saveSettings(); });
   $('resolution').addEventListener('change', () => { settings.resolution = $('resolution').value; saveSettings(); });
   $('after-launch').addEventListener('change', () => { settings.afterLaunch = $('after-launch').value; saveSettings(); });
+  $('join-server').addEventListener('change', () => { settings.joinServer = $('join-server').checked; saveSettings(); });
+  $('reduce-motion').addEventListener('change', () => { settings.reduceMotion = $('reduce-motion').checked; saveSettings(); applyMotion(); });
+  const applyMotion = () => document.body.classList.toggle('reduce-motion', !!settings.reduceMotion);
+
+  $('btn-panel-url').addEventListener('click', async () => {
+    const st = $('panel-url-status');
+    st.textContent = 'Test du panel…';
+    try {
+      const base = await invoke('set_panel_url', { url: $('panel-url').value });
+      st.textContent = `✅ Panel utilisé : ${base}`;
+      await loadConfig();
+      loadStatuses(); loadNotifications(); loadLauncherContent(); loadGameEvents();
+    } catch (err) { st.textContent = `❌ ${errMsg(err)}`; }
+  });
 
   async function renderOptionalMods() {
     const box = $('optional-mods');
     const cfg = state.config;
     let data = null;
-    try {
-      data = await invoke('panel_get', { endpoint: 'utils/mods', instance: settings.instance, channel: settings.channel });
-    } catch (_) {}
+    try { data = await invoke('panel_get', { endpoint: 'utils/mods', instance: settings.instance, channel: settings.channel }); } catch (_) {}
     box.replaceChildren();
     const list = (data && data.optionalMods) || [];
-    if (!cfg || list.length === 0) {
-      box.append(el('p', { class: 'muted small', text: 'Aucun mod optionnel pour ce serveur.' }));
-      return;
-    }
+    if (!cfg || list.length === 0) { box.append(el('p', { class: 'muted small', text: 'Aucun mod optionnel pour ce serveur.' })); return; }
     const meta = data.mods || {};
     const key = `${settings.instance}:${settings.channel}`;
     const saved = settings.optionalMods[key] || {};
     let onDisk = {};
-    try {
-      onDisk = await invoke('optional_mods_state', {
-        dataDirectory: cfg.dataDirectory, instance: settings.instance, channel: settings.channel, files: list,
-      });
-    } catch (_) {}
+    try { onDisk = await invoke('optional_mods_state', { dataDirectory: cfg.dataDirectory, instance: settings.instance, channel: settings.channel, files: list }); } catch (_) {}
     for (const file of list) {
       const info = meta[file] || {};
-      const enabled = Object.prototype.hasOwnProperty.call(saved, file) ? saved[file] : (onDisk[file] ?? !!info.recommanded);
       const input = el('input', { type: 'checkbox' });
-      input.checked = !!enabled;
+      input.checked = !!(Object.prototype.hasOwnProperty.call(saved, file) ? saved[file] : (onDisk[file] ?? info.recommanded));
       input.addEventListener('change', async () => {
         try {
-          await invoke('set_optional_mod', {
-            dataDirectory: cfg.dataDirectory, instance: settings.instance, channel: settings.channel, file, enabled: input.checked,
-          });
+          await invoke('set_optional_mod', { dataDirectory: cfg.dataDirectory, instance: settings.instance, channel: settings.channel, file, enabled: input.checked });
           saved[file] = input.checked;
           settings.optionalMods[key] = saved;
           saveSettings();
-        } catch (err) {
-          input.checked = !input.checked;
-          toast(`Impossible de changer ce mod : ${errMsg(err)}`);
-        }
+        } catch (err) { input.checked = !input.checked; toast(`Impossible de changer ce mod : ${errMsg(err)}`); }
       });
-      box.append(el('label', { class: 'mod' }, [
-        input,
-        el('div', null, [
-          el('strong', { text: info.name || file }),
-          info.description ? el('div', { class: 'desc', text: info.description }) : null,
-          info.recommanded ? el('div', { class: 'desc', text: '⭐ Recommandé' }) : null,
-        ]),
-      ]));
+      box.append(el('label', { class: 'mod' }, [input, el('div', null, [
+        el('strong', { text: info.name || file }),
+        info.description ? el('div', { class: 'desc', text: info.description }) : null,
+        info.recommanded ? el('div', { class: 'desc', text: '⭐ Recommandé' }) : null,
+      ])]));
     }
   }
 
@@ -974,136 +1073,142 @@
     $('repair-status').textContent = 'Analyse en cours…';
     $('btn-repair').disabled = true;
     try {
-      const r = await invoke('repair_instance', {
-        dataDirectory: cfg.dataDirectory, instance: settings.instance, channel: settings.channel,
-        ignored: (cfg.ignored || []).map(String),
-      });
+      const r = await invoke('repair_instance', { dataDirectory: cfg.dataDirectory, instance: settings.instance, channel: settings.channel, ignored: (cfg.ignored || []).map(String) });
       $('repair-status').textContent = `${r.total} fichiers vérifiés · ${r.corrupted.length} abîmé(s) supprimé(s) · ${r.missing.length} manquant(s). Cliquez sur Jouer pour terminer.`;
-    } catch (err) {
-      $('repair-status').textContent = `Réparation impossible : ${errMsg(err)}`;
-    } finally {
-      $('btn-repair').disabled = false;
-    }
+    } catch (err) { $('repair-status').textContent = `Réparation impossible : ${errMsg(err)}`; } finally { $('btn-repair').disabled = false; }
   });
-
   $('btn-open-dir').addEventListener('click', () => {
-    const cfg = state.config || {};
-    invoke('open_game_dir', { dataDirectory: cfg.dataDirectory || 'Nexus', instance: settings.instance, channel: settings.channel })
+    invoke('open_game_dir', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel })
       .catch((err) => toast(`Dossier impossible à ouvrir : ${errMsg(err)}`));
   });
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // Diagnostic
+  // ===========================================================================
+  let lastReport = '';
+  async function openDiagnostic() {
+    $('diag-overlay').classList.remove('hidden');
+    $('diag-status').textContent = '';
+    await runDiagnostic();
+  }
+  async function runDiagnostic() {
+    const report = $('diag-report');
+    const summary = $('diag-summary');
+    report.textContent = 'Analyse en cours (système, installation, connexion aux serveurs)…';
+    summary.replaceChildren();
+    ['diag-copy', 'diag-save', 'diag-send', 'diag-rerun'].forEach((id) => { $(id).disabled = true; });
+    try {
+      const ram = launchRam();
+      lastReport = await invoke('collect_diagnostic', {
+        req: {
+          data_directory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel,
+          site_url: siteUrl(),
+          settings_summary: `RAM ${ram.min}-${ram.max} Go, profil ${settings.profile || 'auto'}${settings.ramMin ? ' (personnalisé)' : ''}, Java ${settings.javaPath ? 'personnalisé' : 'fourni'}, résolution ${settings.resolution}`,
+        },
+      });
+      report.textContent = lastReport;
+      const net = lastReport.split('--- Réseau ---')[1] || '';
+      for (const line of net.split('\n').slice(1, 5)) {
+        const m = /^(\S+) : (OK|ÉCHEC) \((\d+) ms\)(.*)$/.exec(line.trim());
+        if (m) summary.append(el('div', { class: `probe ${m[2] === 'OK' ? 'ok' : 'ko'}` }, [el('strong', { text: `${m[2] === 'OK' ? '✔' : '✖'} ${m[1]}` }), el('div', { class: 'muted', text: `${m[3]} ms${m[4]}` })]));
+      }
+    } catch (err) {
+      report.textContent = `Diagnostic impossible : ${errMsg(err)}`;
+    } finally {
+      ['diag-copy', 'diag-save', 'diag-send', 'diag-rerun'].forEach((id) => { $(id).disabled = false; });
+    }
+  }
+  $('btn-diagnostic').addEventListener('click', () => openDiagnostic());
+  $('diag-close').addEventListener('click', () => $('diag-overlay').classList.add('hidden'));
+  $('diag-rerun').addEventListener('click', () => runDiagnostic());
+  $('diag-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(lastReport); $('diag-status').textContent = 'Rapport copié : collez-le sur Discord ou dans un ticket.'; } catch (_) { $('diag-status').textContent = 'Copie impossible.'; }
+  });
+  $('diag-save').addEventListener('click', async () => {
+    try {
+      const path = await invoke('save_diagnostic', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel, report: lastReport });
+      $('diag-status').textContent = `Enregistré : ${path}`;
+      invoke('open_game_dir', { dataDirectory: (state.config && state.config.dataDirectory) || 'Nexus', instance: settings.instance, channel: settings.channel }).catch(() => {});
+    } catch (err) { $('diag-status').textContent = `Enregistrement impossible : ${errMsg(err)}`; }
+  });
+  $('diag-send').addEventListener('click', async () => {
+    $('diag-status').textContent = 'Envoi…';
+    try {
+      const r = await invoke('send_diagnostic', { instance: settings.instance, report: lastReport });
+      $('diag-status').textContent = r.sent ? '✅ Rapport envoyé à l’équipe. Merci !' : 'Le panel ne reçoit pas encore les rapports : utilisez « Copier » et envoyez-le sur Discord.';
+    } catch (err) { $('diag-status').textContent = `Envoi impossible : ${errMsg(err)}. Utilisez « Copier ».`; }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') ['diag-overlay', 'crash-overlay'].forEach((id) => $(id).classList.add('hidden'));
+  });
+
+  // ===========================================================================
   // Mise à jour du launcher
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   async function installUpdate(version) {
     $('update-overlay').classList.remove('hidden');
     $('update-text').textContent = `Installation de la version ${version}… Le launcher va redémarrer.`;
-    try {
-      await invoke('install_launcher_update');
-    } catch (err) {
-      $('update-overlay').classList.add('hidden');
-      toast(`Mise à jour impossible : ${errMsg(err)}`);
-    }
+    try { await invoke('install_launcher_update'); } catch (err) { $('update-overlay').classList.add('hidden'); toast(`Mise à jour impossible : ${errMsg(err)}`); }
   }
-
   async function checkUpdate(auto) {
     try {
       const info = await invoke('check_launcher_update');
-      $('launcher-version').textContent = `Launcher ${info.current}`;
-      if (info.available) {
-        if (auto) return installUpdate(info.version);
-        $('update-status').textContent = `Version ${info.version} disponible.`;
-        return installUpdate(info.version);
-      }
+      if (info.available) { if (!auto) $('update-status').textContent = `Version ${info.version} disponible.`; return installUpdate(info.version); }
       if (!auto) $('update-status').textContent = `Vous avez la dernière version (${info.current}).`;
     } catch (err) {
       uiLog('warn', `Mise à jour non vérifiée : ${errMsg(err)}`);
-      if (!auto) $('update-status').textContent = 'Vérification impossible pour le moment (serveur de mises à jour injoignable ou aucune version publiée). Réessayez plus tard.';
+      if (!auto) $('update-status').textContent = 'Vérification impossible pour le moment (serveur de mises à jour injoignable ou aucune version publiée).';
     }
     return null;
   }
   $('btn-check-update').addEventListener('click', () => checkUpdate(false));
 
-  // ---------------------------------------------------------------------------
-  // Console
-  // ---------------------------------------------------------------------------
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'I')) {
-      e.preventDefault();
-      invoke('toggle_devtools').catch(() => {});
-    }
-  });
-  $('btn-devtools').addEventListener('click', () => invoke('toggle_devtools').catch(() => {}));
-  $('btn-clear-logs').addEventListener('click', async () => {
-    $('log-output').replaceChildren();
-    await invoke('clear_logs').catch(() => {});
-  });
-  $('btn-copy-logs').addEventListener('click', async () => {
-    const text = await invoke('export_logs_text').catch(() => $('log-output').textContent);
-    try {
-      await navigator.clipboard.writeText(text);
-      toast('Journal copié.');
-    } catch (_) {
-      toast('Copie impossible.');
-    }
-  });
-
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Démarrage
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   async function listenAll() {
-    if (!tauriEvent) return;
-    const on = (name, fn) => tauriEvent.listen(name, fn).catch((err) => uiLog('error', `Écoute ${name} impossible : ${errMsg(err)}`));
+    if (!T.event) return;
+    const on = (name, fn) => T.event.listen(name, fn).catch((err) => uiLog('error', `Écoute ${name} impossible : ${errMsg(err)}`));
     await Promise.all([
       on('launcher://log', (e) => appendLogLine(e.payload)),
       on('launcher://install-progress', (e) => onInstallProgress(e.payload)),
-      on('launcher://game-exit', () => onGameExit()),
       on('launcher://launch-result', (e) => onLaunchResult(e.payload)),
-      on('launcher://update-error', (e) => {
-        $('update-overlay').classList.add('hidden');
-        toast(`Mise à jour impossible : ${e.payload}`);
-      }),
-      on('launcher://update-progress', (e) => {
-        const p = e.payload || {};
-        const pct = p.total ? Math.round((p.downloaded / p.total) * 100) : 0;
-        $('update-fill').style.width = `${pct}%`;
-      }),
+      on('launcher://game-exit', (e) => onGameExit(e.payload)),
+      on('launcher://update-progress', (e) => { const p = e.payload || {}; $('update-fill').style.width = `${p.total ? Math.round((p.downloaded / p.total) * 100) : 0}%`; }),
+      on('launcher://update-error', (e) => { $('update-overlay').classList.add('hidden'); toast(`Mise à jour impossible : ${e.payload}`); }),
     ]);
   }
 
   async function bootstrap() {
-    await listenAll();
-    try {
-      const app = window.__TAURI__ && window.__TAURI__.app;
-      if (app) $('launcher-version').textContent = `Launcher ${await app.getVersion()}`;
-    } catch (_) {}
-    (await invoke('get_logs').catch(() => [])).forEach(appendLogLine);
-
-    try {
-      const gs = await invoke('game_status');
-      state.gameRunning = !!(gs && gs.running);
-    } catch (_) {}
+    applyMotion();
     renderServers();
     renderChannel();
-    const restored = await invoke('azuriom_restore_session', { fallbackSiteUrl: 'https://geoventure.fr/' }).catch(() => null);
+    await listenAll();
+    try { if (T.app) $('launcher-version').textContent = `Geoventure Launcher ${await T.app.getVersion()}`; } catch (_) {}
+    (await invoke('get_logs').catch(() => [])).forEach(appendLogLine);
+    try { const gs = await invoke('game_status'); state.gameRunning = !!(gs && gs.running); } catch (_) {}
+
+    $('preload-text').textContent = 'Connexion au panel…';
+    await loadConfig();
+    $('preload-text').textContent = 'Vérification de la session…';
+    const restored = await invoke('azuriom_restore_session', { fallbackSiteUrl: siteUrl() }).catch(() => null);
     renderAccount(restored && restored.account ? restored.account : null);
+    await loadSystem();
+    $('preload').classList.add('done');
 
-    await Promise.all([loadConfig(), loadSystem()]);
-    loadStatuses();
-    loadNotifications();
-    loadGameEvents();
-    loadAchievements();
+    loadStatuses(); loadNotifications(); loadGameEvents(); loadAchievements(); loadNews(); loadLauncherContent();
     checkUpdate(true);
-
     setInterval(renderGameEvents, 1000);
     setInterval(loadStatuses, 60000);
     setInterval(loadNotifications, 5 * 60000);
     setInterval(loadGameEvents, 5 * 60000);
+    setInterval(loadNews, 15 * 60000);
   }
 
   window.addEventListener('error', (e) => uiLog('error', `Erreur de l’interface : ${e.message}`));
   window.addEventListener('unhandledrejection', (e) => uiLog('error', `Erreur de l’interface : ${errMsg(e.reason)}`));
   bootstrap().catch((err) => {
+    $('preload').classList.add('done');
     uiLog('error', `Démarrage de l’interface : ${errMsg(err)}`);
     toast(`Erreur au démarrage : ${errMsg(err)}`);
   });

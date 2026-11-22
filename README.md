@@ -24,12 +24,28 @@ Testé ici (Linux, Xvfb) : dossier vide → écran titre avec Forge et le modpac
 
 ## Interface
 
-Connexion Azuriom (double authentification), serveurs (Geoventure, Elandor, Pokeland), canal
-Stable / Test selon les grades, statut des serveurs, annonces, événements avec compte à rebours,
-maintenance, liste blanche, e-mail vérifié ; profil (succès, classement rafraîchi toutes les 30 s,
-saison, factions) ; réglages (profils de performance, RAM plafonnée à 60 %, arguments Java, Java,
-résolution, comportement pendant la partie, mods optionnels, réparation 1 clic, dossier du jeu) ;
-console.
+Même esprit que le launcher Electron : fond du serveur choisi (zoom lent), barre latérale vitrée
+(tête du joueur, logos des serveurs, canal S/T, bouton Jouer lumineux), animations (écran de
+chargement, apparition des cartes, transitions, progression scintillante) ; option « Réduire les
+animations ».
+
+- **Connexion Azuriom** par le site du panel (`azauth`), double authentification, messages
+  d'erreur en français, liens « Créer un compte » et « Mot de passe oublié ».
+- **Accueil** : actualité du site (flux RSS `/api/rss`) en carrousel + liste, raccourcis et
+  « À découvrir » du panel (`/utils/launcher-content`), statut du serveur (joueurs, ping),
+  annonces, événements avec compte à rebours, maintenance, liste blanche, e-mail vérifié.
+- **Profil** : succès, classement rafraîchi toutes les 30 s, saison, factions.
+- **Performances** : processeur, mémoire totale et libre, système ; bouton « Optimiser pour mon
+  PC » (profil conseillé, RAM plafonnée à 60 %) ; profils Économe / Équilibré / Performant ;
+  alerte si la mémoire libre est trop faible.
+- **Diagnostic** : système, Java, installation, sondes (panel, Azuriom, Mojang, Forge), journaux
+  du launcher et du jeu, dernier rapport de plantage, tout masqué (jetons, e-mails, chemins
+  personnels). Copier, enregistrer, ou envoyer au panel (`POST /utils/diagnostic`, facultatif).
+  Proposé automatiquement si le jeu se ferme anormalement.
+- **Réglages** : résolution, comportement pendant la partie, connexion directe au serveur, mods
+  optionnels, Java, **adresse du panel** (testée avant d'être utilisée), réparation 1 clic,
+  dossier du jeu, mise à jour, déconnexion.
+- **Console** colorée, défilement automatique, copie.
 
 ## Mises à jour automatiques
 
@@ -50,10 +66,10 @@ et remplacer la clé publique : les launchers déjà installés devront alors ê
   celui-ci. À décider avant de le remplacer (par ex. une dernière version Electron qui télécharge
   l'installateur Rust).
 - macOS (non construit par le workflow, pas de signature Apple).
-- Discord Rich Presence, mods communauté, carte, actualités du site, télémétrie, diagnostic
-  envoyé au panel : présents dans le launcher Electron, pas encore ici.
-- Connexion réelle Azuriom et partie sur le vrai serveur : non testées ici (pas d'accès au site
-  ni de compte).
+- Discord Rich Presence, mods communauté, captures d'écran, vidéo, affluence, nouveautés
+  (changelog), télémétrie, anglais : présents dans le launcher Electron, pas encore ici.
+- Connexion Azuriom avec un vrai compte et partie sur le vrai serveur : non testées (refus
+  d'identifiants vérifié contre geoventure.fr, mais pas de compte de test).
 
 ## Commandes
 

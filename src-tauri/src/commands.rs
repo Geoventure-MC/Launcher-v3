@@ -27,7 +27,7 @@ use sysinfo::System;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 pub struct AppState {
-    pub panel_client: PanelClient,
+    pub panel_client: std::sync::RwLock<PanelClient>,
     pub cache_dir: PathBuf,
     pub session_dir: PathBuf,
     pub data_root_dir: PathBuf,
@@ -36,10 +36,23 @@ pub struct AppState {
     pub game_running: Arc<AtomicBool>,
 }
 
+impl AppState {
+    /// Client du panel en cours (l'adresse peut être changée dans les réglages).
+    pub fn panel(&self) -> PanelClient {
+        self.panel_client
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|e| e.into_inner().clone())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemOverview {
     pub total_ram_gb: f64,
+    pub free_ram_gb: f64,
     pub cpu_cores: usize,
+    pub cpu_name: String,
+    pub os: String,
     pub recommended_profile: PerformanceProfileId,
     pub plan: PerformancePlan,
 }
@@ -111,7 +124,7 @@ pub async fn fetch_panel_config(
         ),
     );
     let res = state
-        .panel_client
+        .panel()
         .fetch_config_with_cache(instance.as_deref(), ch, &state.cache_dir)
         .await?;
     if res.offline {
@@ -278,7 +291,7 @@ pub async fn fetch_modpack_manifest(
 ) -> LauncherResult<Vec<ManifestEntry>> {
     let ch = channel.as_deref().unwrap_or("stable");
     state
-        .panel_client
+        .panel()
         .fetch_modpack_manifest(instance.as_deref(), ch)
         .await
 }
@@ -332,7 +345,7 @@ pub async fn sync_modpack_files(
 
     let app_for_cb = app.clone();
     let report = sync_modpack_parallel(
-        state.panel_client.http_client().clone(),
+        state.panel().http_client().clone(),
         &manifest,
         &game_dir,
         &ignored.unwrap_or_default(),
@@ -392,9 +405,23 @@ pub fn get_system_overview(profile: Option<PerformanceProfileId>) -> SystemOverv
     let chosen = profile.unwrap_or(recommended);
     let plan = build_performance_profile(chosen, total_ram_gb, cpu_cores);
 
+    let free_ram_gb = (sys.available_memory() as f64 / 1_073_741_824.0 * 10.0).trunc() / 10.0;
+    let cpu_name = sys
+        .cpus()
+        .first()
+        .map(|c| c.brand().trim().to_string())
+        .unwrap_or_default();
+    let os = format!(
+        "{} ({})",
+        System::long_os_version().unwrap_or_else(|| std::env::consts::OS.to_string()),
+        std::env::consts::ARCH
+    );
     SystemOverview {
         total_ram_gb,
+        free_ram_gb,
         cpu_cores,
+        cpu_name,
+        os,
         recommended_profile: recommended,
         plan,
     }
@@ -543,7 +570,7 @@ async fn run_launch(
     let mut ignored = req.ignored.clone();
     ignored.push("launcher_config".into());
     match state
-        .panel_client
+        .panel()
         .fetch_modpack_manifest(req.instance.as_deref(), ch)
         .await
     {
@@ -725,6 +752,7 @@ pub const PANEL_READ_ROUTES: &[&str] = &[
     "utils/community-mods",
     "utils/wonder",
     "utils/changelog",
+    "utils/launcher-content",
 ];
 
 /// Lit une route JSON du panel (annonces, statut, succès, classements, saisons…).
@@ -742,7 +770,7 @@ pub async fn panel_get(
     // `utils/game-events` est globale : jamais `?instance=`.
     let inst = if ep == "utils/game-events" { None } else { instance };
     state
-        .panel_client
+        .panel()
         .fetch_panel_json(ep, inst.as_deref(), channel.as_deref().unwrap_or("stable"))
         .await
 }
@@ -799,7 +827,7 @@ pub async fn repair_instance(
     let ch = channel.as_deref().unwrap_or("stable");
     let game_dir = resolve_game_directory(&state.data_root_dir, &data_directory, instance.as_deref(), "geoventure", ch);
     let _ = tokio::fs::remove_file(crate::config::cache_file_path(&state.cache_dir, instance.as_deref(), ch)).await;
-    let manifest = state.panel_client.fetch_modpack_manifest(instance.as_deref(), ch).await?;
+    let manifest = state.panel().fetch_modpack_manifest(instance.as_deref(), ch).await?;
     let mut ign = ignored.unwrap_or_default();
     ign.push("launcher_config".into());
     let report = diff_verify_manifest(&manifest, &game_dir, &ign).await?;
@@ -1066,4 +1094,208 @@ mod tests {
         assert!(safe_mod_file_name("a\\b.jar").is_none());
         assert!(safe_mod_file_name("readme.txt").is_none());
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Actualité, adresse du panel, diagnostic
+// ---------------------------------------------------------------------------------------------
+
+/// Actualité du site Azuriom (flux RSS `/api/rss`), en texte brut.
+#[tauri::command]
+pub async fn fetch_news(site_url: String) -> LauncherResult<Vec<crate::extras::NewsItem>> {
+    let http = PanelClient::new(&site_url, HttpTimeouts::default())?;
+    crate::extras::fetch_news(http.http_client(), &site_url).await
+}
+
+pub const PANEL_URL_FILE: &str = "panel_url.txt";
+
+#[tauri::command]
+pub fn get_panel_url(state: State<'_, AppState>) -> serde_json::Value {
+    serde_json::json!({
+        "current": state.panel().base_url().to_string(),
+        "default": crate::config::DEFAULT_PANEL_URL,
+    })
+}
+
+/// Change l'adresse du panel (comme `geoventure_server_url` dans le launcher Electron).
+/// L'adresse est d'abord testée : `utils/api` doit répondre avec une configuration lisible.
+/// Une adresse vide remet celle par défaut.
+#[tauri::command]
+pub async fn set_panel_url(app: AppHandle, state: State<'_, AppState>, url: String) -> LauncherResult<String> {
+    let wanted = if url.trim().is_empty() {
+        crate::config::DEFAULT_PANEL_URL.to_string()
+    } else {
+        url.trim().to_string()
+    };
+    let client = PanelClient::new(&wanted, HttpTimeouts::default())?;
+    let probe_dir = state.cache_dir.join("panel-probe");
+    let res = client.fetch_config_with_cache(None, "stable", &probe_dir).await?;
+    let _ = tokio::fs::remove_dir_all(&probe_dir).await;
+    if res.offline {
+        return Err(LauncherError::Internal("Ce panel ne répond pas.".into()));
+    }
+    let base = client.base_url().to_string();
+    tokio::fs::create_dir_all(&state.session_dir).await?;
+    if base == crate::config::DEFAULT_PANEL_URL {
+        let _ = tokio::fs::remove_file(state.session_dir.join(PANEL_URL_FILE)).await;
+    } else {
+        tokio::fs::write(state.session_dir.join(PANEL_URL_FILE), &base).await?;
+    }
+    if let Ok(mut g) = state.panel_client.write() {
+        *g = client;
+    }
+    emit_log(&app, &state.logs, LogLevel::Info, "panel", format!("Panel utilisé : {base}"));
+    Ok(base)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiagnosticRequest {
+    pub data_directory: String,
+    pub instance: Option<String>,
+    pub channel: Option<String>,
+    pub site_url: Option<String>,
+    #[serde(default)]
+    pub settings_summary: Option<String>,
+}
+
+/// Rapport de diagnostic : système, Java, installation, sondes réseau, journaux du launcher et
+/// du jeu, dernier rapport de plantage. Tout est masqué (`extras::redact`) avant d'être renvoyé.
+#[tauri::command]
+pub async fn collect_diagnostic(app: AppHandle, state: State<'_, AppState>, req: DiagnosticRequest) -> LauncherResult<String> {
+    use crate::extras::{probe, redact, tail_file, tail_lines};
+    use std::fmt::Write as _;
+    let ch = req.channel.as_deref().unwrap_or("stable");
+    let game_dir = resolve_game_directory(&state.data_root_dir, &req.data_directory, req.instance.as_deref(), "geoventure", ch);
+    let sys = get_system_overview(None);
+    let mut r = String::new();
+    let _ = writeln!(r, "=== Diagnostic Geoventure Launcher (Rust) ===");
+    let _ = writeln!(r, "Date : {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z"));
+    let _ = writeln!(r, "Launcher : {}", app.package_info().version);
+    let _ = writeln!(r, "Système : {}", sys.os);
+    let _ = writeln!(r, "Processeur : {} ({} cœurs)", sys.cpu_name, sys.cpu_cores);
+    let _ = writeln!(r, "Mémoire : {} Go au total, {} Go libres, plafond jeu {} Go", sys.total_ram_gb, sys.free_ram_gb, sys.plan.cap_gb);
+    let profile_fr = match sys.recommended_profile {
+        PerformanceProfileId::Eco => "Économe",
+        PerformanceProfileId::Balanced => "Équilibré",
+        PerformanceProfileId::Performance => "Performant",
+    };
+    let _ = writeln!(r, "Profil conseillé : {profile_fr}");
+    if let Some(s) = &req.settings_summary {
+        let _ = writeln!(r, "Réglages : {s}");
+    }
+    let _ = writeln!(r, "Instance : {} / canal {ch}", req.instance.as_deref().unwrap_or("geoventure"));
+    let _ = writeln!(r, "Dossier de jeu : {} ({})", game_dir.display(), if game_dir.is_dir() { "présent" } else { "absent" });
+    let _ = writeln!(r, "Panel : {}", state.panel().base_url());
+
+    let _ = writeln!(r, "\n--- Installation ---");
+    let count = |p: &std::path::Path| std::fs::read_dir(p).map(|d| d.count()).unwrap_or(0);
+    let _ = writeln!(r, "versions/ : {} · libraries/ : {} · loader/forge/versions : {}",
+        count(&game_dir.join("versions")), count(&game_dir.join("libraries")), count(&game_dir.join("loader/forge/versions")));
+    let mods: Vec<String> = std::fs::read_dir(game_dir.join("mods"))
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    let _ = writeln!(r, "mods/ : {} fichier(s), dont {} désactivé(s)", mods.len(), mods.iter().filter(|m| m.ends_with("-disable")).count());
+    let runtimes: Vec<String> = std::fs::read_dir(game_dir.join("runtime"))
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    let _ = writeln!(r, "Java fourni : {}", if runtimes.is_empty() { "aucun".to_string() } else { runtimes.join(", ") });
+    let gd = game_dir.clone();
+    let jdks = tokio::task::spawn_blocking(move || detect_installed_jdks(Some(&gd))).await.unwrap_or_default();
+    for j in jdks.iter().take(6) {
+        let _ = writeln!(r, "Java détecté : {} — {}", j.label, j.path);
+    }
+
+    let _ = writeln!(r, "\n--- Réseau ---");
+    let http = PanelClient::download_client()?;
+    let panel_url = format!("{}api-schema.json", state.panel().base_url());
+    let site = req.site_url.clone().unwrap_or_else(|| "https://geoventure.fr/".into());
+    let probes = futures_util::future::join_all([
+        probe(&http, "Panel", &panel_url),
+        probe(&http, "Azuriom", &site),
+        probe(&http, "Mojang", crate::install::VERSION_MANIFEST_URL),
+        probe(&http, "Forge", "https://maven.minecraftforge.net/"),
+    ])
+    .await;
+    for p in probes {
+        let _ = writeln!(r, "{} : {} ({} ms){}", p.name,
+            if p.ok { "OK" } else { "ÉCHEC" },
+            p.millis,
+            match (p.status, &p.error) { (Some(s), _) => format!(" HTTP {s}"), (None, Some(e)) => format!(" {e}"), _ => String::new() });
+    }
+
+    let _ = writeln!(r, "\n--- Journal du launcher (300 dernières lignes) ---");
+    let _ = writeln!(r, "{}", tail_lines(&state.logs.export_text(), 300));
+    let _ = writeln!(r, "\n--- logs/latest.log du jeu (300 dernières lignes) ---");
+    let _ = writeln!(r, "{}", tail_file(&game_dir.join("logs/latest.log"), 300).unwrap_or_else(|| "(absent)".into()));
+    let crash = std::fs::read_dir(game_dir.join("crash-reports")).ok().and_then(|d| {
+        d.flatten().max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok()).map(|e| e.path())
+    });
+    if let Some(c) = crash {
+        let _ = writeln!(r, "\n--- Dernier rapport de plantage : {} ---", c.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+        let head = std::fs::read_to_string(&c).map(|t| t.lines().take(80).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let _ = writeln!(r, "{head}");
+    }
+
+    let mut secrets = Vec::new();
+    if let Ok(Some(acc)) = load_account_session(&state.session_dir).await {
+        secrets.push(acc.access_token);
+        secrets.push(acc.uuid);
+    }
+    let mut homes = Vec::new();
+    if let Some(b) = directories::BaseDirs::new() {
+        homes.push(b.home_dir().to_string_lossy().to_string());
+    }
+    Ok(redact(&r, &homes, &secrets))
+}
+
+/// Enregistre le rapport dans `<dossier de jeu>/logs/diagnostic-<date>.txt` et renvoie le chemin.
+#[tauri::command]
+pub async fn save_diagnostic(
+    state: State<'_, AppState>,
+    data_directory: String,
+    instance: Option<String>,
+    channel: Option<String>,
+    report: String,
+) -> LauncherResult<String> {
+    let game_dir = resolve_game_directory(&state.data_root_dir, &data_directory, instance.as_deref(), "geoventure", channel.as_deref().unwrap_or("stable"));
+    let dir = game_dir.join("logs");
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join(format!("diagnostic-{}.txt", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    tokio::fs::write(&path, report).await?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Envoie le rapport (déjà masqué) au panel : `POST utils/diagnostic`. Un panel sans cette route
+/// (404, 405, 501) n'est pas une erreur : la réponse l'indique.
+#[tauri::command]
+pub async fn send_diagnostic(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance: Option<String>,
+    report: String,
+) -> LauncherResult<serde_json::Value> {
+    let panel = state.panel();
+    let url = panel
+        .base_url()
+        .join("utils/diagnostic")
+        .map_err(|e| LauncherError::InvalidUrl(e.to_string()))?;
+    let body = serde_json::json!({
+        "launcherVersion": app.package_info().version.to_string(),
+        "instance": instance,
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        "report": report,
+    });
+    let resp = panel
+        .http_client()
+        .post(url.clone())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| LauncherError::Network { url: url.to_string(), message: e.to_string() })?;
+    let status = resp.status().as_u16();
+    Ok(match status {
+        200..=299 => serde_json::json!({ "sent": true, "status": status }),
+        404 | 405 | 501 => serde_json::json!({ "sent": false, "unsupported": true, "status": status }),
+        _ => return Err(LauncherError::HttpStatus { status, url: url.to_string() }),
+    })
 }

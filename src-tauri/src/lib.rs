@@ -3,6 +3,7 @@ pub mod commands;
 pub mod config;
 pub mod downloader;
 pub mod error;
+pub mod extras;
 pub mod forge;
 pub mod install;
 pub mod java;
@@ -51,8 +52,13 @@ pub fn run() {
         "Geoventure Launcher Rust (Tauri v2) initialisé — Azuriom + timeouts stricts actifs.",
     );
 
+    // Adresse du panel choisie dans les réglages (sinon celle par défaut).
+    let panel_client = std::fs::read_to_string(session_dir.join(commands::PANEL_URL_FILE))
+        .ok()
+        .and_then(|u| PanelClient::new(u.trim(), config::HttpTimeouts::default()).ok())
+        .unwrap_or(panel_client);
     let state = AppState {
-        panel_client,
+        panel_client: std::sync::RwLock::new(panel_client),
         cache_dir,
         session_dir,
         data_root_dir,
@@ -91,6 +97,12 @@ pub fn run() {
             commands::check_launcher_update,
             commands::optional_mods_state,
             commands::game_status,
+            commands::fetch_news,
+            commands::get_panel_url,
+            commands::set_panel_url,
+            commands::collect_diagnostic,
+            commands::save_diagnostic,
+            commands::send_diagnostic,
             commands::set_optional_mod,
             commands::install_launcher_update,
         ])
