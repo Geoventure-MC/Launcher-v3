@@ -1,86 +1,159 @@
-# Geoventure Launcher (Rust + Tauri v2)
+<div align="center">
 
-Nouveau launcher Geoventure, en Rust + Tauri v2, destiné à remplacer le launcher Electron
-(`master`). Binaire natif de quelques Mo, et il installe le jeu tout seul sur un PC neuf.
+<img src="frontend/assets/img/icon.png" alt="Geoventure" width="112" height="112">
 
-## Ce que fait le bouton « Jouer »
+# Geoventure Launcher
 
-1. **Minecraft 1.20.1** : JSON de version, librairies, client, ~3 600 ressources (Mojang).
-2. **Java 17** : le Java fourni par Mojang (`java-runtime-gamma`) dans `runtime/`. Un Java choisi
-   dans les réglages est utilisé à la place s'il est valide.
-3. **Forge** : installeur officiel, librairies, puis les processeurs qui patchent le client.
-   Délai de 3 min sans sortie par processeur : arrêt et message clair au lieu d'un écran figé.
-4. **Modpack** du panel (`/data?instance=…`), vérifié par empreinte. Les anciens jars retirés du
-   modpack sont supprimés de `mods/`. Les réglages du joueur (`options.txt`, `config/…` déjà
-   présents) et les mods désactivés (`.jar-disable`) ne sont jamais écrasés.
-5. **Lancement** (connexion directe au serveur de l'instance), `earlyWindowControl=false` dans
-   `config/fml.toml`.
+**Le launcher officiel du serveur Minecraft [Geoventure](https://geoventure.fr).**
+Installe le jeu, Forge et le modpack en un clic, puis vous connecte directement au serveur.
 
-Les dossiers sont ceux du launcher Electron (`%APPDATA%\.Nexus`, `instances/<slug>`,
-`instances/<slug>-test`, `runtime/`, `loader/forge/`…) : un joueur qui change de launcher ne
-re-télécharge rien. Deuxième lancement : quelques secondes de vérification.
+[![Build](https://github.com/Geoventure-MC/Launcher-v3/actions/workflows/rust-release.yml/badge.svg?branch=master)](https://github.com/Geoventure-MC/Launcher-v3/actions/workflows/rust-release.yml)
+![Rust](https://img.shields.io/badge/Rust-Tauri%202-dea584?logo=rust&logoColor=white)
+![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1%20·%20Forge-4ade80?logo=curseforge&logoColor=white)
+![Plateformes](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-0b0f14)
+[![Licence](https://img.shields.io/badge/licence-CC%20BY--NC%204.0-lightgrey)](LICENSE.md)
 
-Testé ici (Linux, Xvfb) : dossier vide → écran titre avec Forge et le modpack Geoventure en ~75 s.
+[**Télécharger**](https://github.com/Geoventure-MC/Launcher-v3/releases) ·
+[Site](https://geoventure.fr) ·
+[Discord](https://discord.gg/VCmNXHvf77) ·
+[Signaler un problème](https://github.com/Geoventure-MC/Launcher-v3/issues)
 
-## Interface
+<img src="docs/images/accueil.png" alt="Accueil du launcher Geoventure" width="880">
 
-Même esprit que le launcher Electron : fond du serveur choisi (zoom lent), barre latérale vitrée
-(tête du joueur, logos des serveurs, canal S/T, bouton Jouer lumineux), animations (écran de
-chargement, apparition des cartes, transitions, progression scintillante) ; option « Réduire les
-animations ».
+</div>
 
-- **Connexion Azuriom** par le site du panel (`azauth`), double authentification, messages
-  d'erreur en français, liens « Créer un compte » et « Mot de passe oublié ».
-- **Accueil** : actualité du site (flux RSS `/api/rss`) en carrousel + liste, raccourcis et
-  « À découvrir » du panel (`/utils/launcher-content`), statut du serveur (joueurs, ping),
-  annonces, événements avec compte à rebours, maintenance, liste blanche, e-mail vérifié.
-- **Profil** : succès, classement rafraîchi toutes les 30 s, saison, factions.
-- **Performances** : processeur, mémoire totale et libre, système ; bouton « Optimiser pour mon
-  PC » (profil conseillé, RAM plafonnée à 60 %) ; profils Économe / Équilibré / Performant ;
-  alerte si la mémoire libre est trop faible.
-- **Diagnostic** : système, Java, installation, sondes (panel, Azuriom, Mojang, Forge), journaux
-  du launcher et du jeu, dernier rapport de plantage, tout masqué (jetons, e-mails, chemins
-  personnels). Copier, enregistrer, ou envoyer au panel (`POST /utils/diagnostic`, facultatif).
-  Proposé automatiquement si le jeu se ferme anormalement.
-- **Réglages** : résolution, comportement pendant la partie, connexion directe au serveur, mods
-  optionnels, Java, **adresse du panel** (testée avant d'être utilisée), réparation 1 clic,
-  dossier du jeu, mise à jour, déconnexion.
-- **Console** colorée, défilement automatique, copie.
+---
 
-## Mises à jour automatiques
+## Installation
 
-Au démarrage, le launcher lit `latest.json` dans la release GitHub **`rust-latest`**, vérifie la
-signature et s'installe. Le workflow `.github/workflows/rust-release.yml` s'en charge à chaque
-push sur `master` : tests (Rust et interface), build Windows (NSIS), Linux (AppImage, deb) et
-macOS (universel), version `rust-v2.0.<n>`, recopie de `latest.json`.
+Rendez-vous sur la page des [versions](https://github.com/Geoventure-MC/Launcher-v3/releases) et prenez la plus récente **« Geoventure Launcher v2.x »** :
 
-La version GitHub **« Latest » reste la dernière version de l'ancien launcher (Electron)** : elle
-installe ce launcher (signature vérifiée), y recopie la connexion du joueur, l'ouvre et se ferme.
-Les anciens launchers pas encore à jour la trouvent ainsi. Les versions Rust sont donc créées avec
-`--latest=false` : ne jamais en marquer une « Latest ». Le code Electron est conservé sur la
-branche `electron`.
+| Système | Fichier | Remarque |
+| --- | --- | --- |
+| 🪟 **Windows 10 / 11** | `Geoventure.Launcher_x.y.z_x64-setup.exe` | Installation sans droits administrateur. |
+| 🍎 **macOS** (Intel et Apple Silicon) | `Geoventure.Launcher_x.y.z_universal.dmg` | Première ouverture : clic droit sur l'app › **Ouvrir**. |
+| 🐧 **Linux** | `.AppImage` ou `.deb` | AppImage : rendez-le exécutable, puis lancez-le. |
 
-**Secret requis :** `TAURI_SIGNING_PRIVATE_KEY` (Settings → Secrets and variables → Actions), la
-clé privée qui correspond à la clé publique de `src-tauri/tauri.conf.json`. Ne jamais la committer ;
-si elle est perdue, les launchers installés devront être réinstallés à la main.
-Facultatif : `DISCORD_RELEASE_WEBHOOK` pour annoncer chaque version sur Discord.
+Le launcher se met ensuite **à jour tout seul**.
 
-## Limites connues
+> **Vous aviez l'ancien launcher (Nexus) ?** Vous n'avez rien à faire : à sa prochaine ouverture, il installe le nouveau, vous garde connecté et l'ouvre. Vos mondes, mods et réglages du jeu sont conservés.
 
-- macOS : pas de signature Apple (le joueur doit autoriser l'app la première fois).
-- Linux : l'icône près de l'horloge demande la bibliothèque appindicator.
+## Fonctionnalités
 
-## Commandes
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🎮 Jouer
+- Minecraft **1.20.1**, **Java 17** et **Forge** installés automatiquement
+- Modpack synchronisé et vérifié fichier par fichier
+- Connexion directe au serveur, canaux **Stable** et **Test**
+- Plusieurs serveurs : Geoventure, Elandor, Pokeland
+- Vitesse et temps restant des téléchargements
+
+</td>
+<td width="50%" valign="top">
+
+### 🩺 Fiabilité
+- **Analyse des plantages** : cause probable et conseil (mémoire, Java, pilote graphique, mods…)
+- **Diagnostic** en un clic, envoyé à l'équipe sans données personnelles
+- Réparation de l'installation en un clic
+- Journal du jeu et du launcher dans la console
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### ⚡ Performances
+- **Optimisation automatique** de la mémoire selon votre PC
+- Profils **Économe**, **Équilibré**, **Performant**
+- Détection de la carte graphique
+- Réglages du jeu allégés pour les petites configurations (au choix)
+
+</td>
+<td valign="top">
+
+### 🧩 Contenu
+- **Mods de la communauté** installables en un clic
+- **Shaders** (avec Oculus) et packs de ressources
+- Galerie de **captures d'écran**
+- Actualités, événements, affluence du serveur, Merveille
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 👤 Compte et profil
+- Connexion avec votre compte [geoventure.fr](https://geoventure.fr), double authentification
+- Session protégée dans le coffre-fort du système
+- Succès, classements, saisons et factions
+
+</td>
+<td valign="top">
+
+### ✨ Confort
+- Présence **Discord**
+- Icône près de l'horloge, ouverture au démarrage
+- Notifications (maintenance, événements)
+- Interface en **français** et en **anglais**
+
+</td>
+</tr>
+</table>
+
+<div align="center">
+<img src="docs/images/mods.png" alt="Mods de la communauté" width="430">
+<img src="docs/images/profil.png" alt="Profil et succès" width="430">
+</div>
+
+## Confidentialité
+
+- Votre mot de passe n'est envoyé qu'au site Geoventure, en HTTPS, et n'est jamais enregistré.
+- Les statistiques (lancements, plantages, durée de démarrage) ne sont envoyées **qu'avec votre accord**, sans texte libre ni donnée personnelle. Modifiable dans **Réglages › Jeu**.
+- Les rapports de diagnostic masquent jetons, adresses e-mail et chemins de votre ordinateur, et ne partent que si vous cliquez sur « Envoyer ».
+
+## Développement
+
+Le launcher est écrit en **Rust** avec **[Tauri 2](https://tauri.app)** ; l'interface est en HTML, CSS et JavaScript, sans framework.
+
+```text
+src-tauri/   Rust : installation du jeu, Forge, modpack, connexion, plantages, mises à jour
+frontend/    Interface : index.html, app.js, styles.css, i18n.js
+tests/ui/    Tests de l'interface (Playwright, avec un faux pont Tauri)
+```
+
+**Prérequis :** [Rust](https://rustup.rs) stable et Node.js 20. Sous Linux : `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev`. Sous Windows : `scripts/install-rust.ps1`.
 
 ```bash
 npm ci
-npm test                       # tests Rust
-npx tauri dev                  # lancer en développement
-npx tauri build                # installateurs (signature : TAURI_SIGNING_PRIVATE_KEY)
-
-# Essai complet sans interface : installe tout dans un dossier, puis lance le jeu
-cargo run --manifest-path src-tauri/Cargo.toml --example install_e2e -- /tmp/geo-test --launch
+npx tauri dev                                    # lancer en développement
+cargo test --manifest-path src-tauri/Cargo.toml  # tests Rust
+npm run test:ui                                  # tests de l'interface
 ```
 
-Linux : `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`. Windows : `scripts/install-rust.ps1`
-(Rust + outils MSVC) ; WebView2 est déjà présent sur Windows 10/11.
+Le launcher lit sa configuration (serveurs, modpack, annonces…) sur le [panel Geoventure](https://github.com/Geoventure-MC/panel).
+
+<details>
+<summary><b>Publication des versions (mainteneurs)</b></summary>
+
+<br>
+
+Chaque push sur `master` lance [`rust-release.yml`](.github/workflows/rust-release.yml) : tests, build Windows, macOS et Linux, puis une version `rust-v2.0.<n>`. Le launcher se met à jour en lisant `latest.json` dans la version `rust-latest`, signé avec le secret `TAURI_SIGNING_PRIVATE_KEY`.
+
+- La version GitHub **« Latest » reste la dernière version de l'ancien launcher** : c'est elle qui fait passer les anciens launchers au nouveau. Les versions Rust sont publiées avec `--latest=false`.
+- L'ancien launcher (Electron) est conservé sur la branche [`electron`](https://github.com/Geoventure-MC/Launcher-v3/tree/electron).
+- Facultatif : le secret `DISCORD_RELEASE_WEBHOOK` annonce chaque version sur Discord.
+
+</details>
+
+## Licence
+
+Distribué sous licence **[CC BY-NC 4.0](LICENSE.md)** : utilisation et modification libres, sans usage commercial, en citant Geoventure.
+
+L'ancien launcher était basé sur le travail de [Luuxis](https://github.com/luuxis) et de CentralCorp.
+
+<div align="center">
+<sub>Fait avec ❤️ par l'équipe Geoventure · Minecraft est une marque de Mojang AB, ce projet n'est pas affilié à Mojang ni à Microsoft.</sub>
+</div>

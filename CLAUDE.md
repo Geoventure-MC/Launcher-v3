@@ -8,8 +8,9 @@ L'ancien launcher Electron est conservé sur la branche `electron` (dernière ve
 ## Règles
 
 - **100 % en français** (commits, releases, PR) : `Ajout :`, `Correction :`, `Amélioration :`, `Documentation :`, `Maintenance :`.
-- Branches : `master` (et `main`, qui reçoit les mêmes commits). Un push sur `master` publie une version
+- Branche `master` (pas de `main`). Un push sur `master` publie une version
   pour tous les joueurs (workflow `rust-release.yml`, mise à jour automatique) : ne pousser que du travail fini et testé.
+  Un commit qui ne touche que la documentation ou des images : `[skip ci]` dans le message, sinon il publie une version.
 - Les versions Rust ne doivent JAMAIS être marquées « Latest » sur GitHub : « Latest » reste la dernière
   version Electron, qui fait passer les anciens launchers à celui-ci.
 - Aucun secret dans le dépôt (clé de signature : secret `TAURI_SIGNING_PRIVATE_KEY`).
