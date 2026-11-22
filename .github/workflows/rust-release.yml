@@ -39,9 +39,36 @@ jobs:
           workspaces: src-tauri
       - name: Tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Tests de l'interface (Playwright, faux pont Tauri)
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:ui
+
+  notes:
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.notes.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Notes de version (titres des commits depuis la pré-version précédente)
+        id: notes
+        run: |
+          prev=$(git tag --list 'rust-v*' --sort=-version:refname | head -n 1)
+          range=${prev:+$prev..}HEAD
+          {
+            echo "body<<FIN_DES_NOTES"
+            git log --no-merges --format='- %s' $range -- . ':(exclude)*.md' | head -n 40
+            echo "FIN_DES_NOTES"
+          } >> "$GITHUB_OUTPUT"
 
   build:
-    needs: test
+    needs: [test, notes]
     strategy:
       fail-fast: false
       matrix:
@@ -102,10 +129,12 @@ jobs:
           args: ${{ matrix.args }}
           tagName: ${{ env.TAG }}
           releaseName: "Launcher Rust v${{ env.VERSION }} (pré-version)"
+          # Ces notes sont aussi celles de « Quoi de neuf ? » dans le launcher après sa mise à jour.
           releaseBody: |
-            Pré-version du nouveau launcher Geoventure (Rust / Tauri). À installer à côté du launcher actuel, qui continue de se mettre à jour normalement.
+            Nouveautés :
+            ${{ needs.notes.outputs.body }}
 
-            Dernier changement : ${{ github.event.head_commit.message || 'voir l’historique de la branche rust' }}
+            Pré-version du nouveau launcher Geoventure (Rust / Tauri), à installer à côté du launcher actuel.
           releaseDraft: false
           prerelease: true
           includeUpdaterJson: true
@@ -128,3 +157,24 @@ jobs:
           fi
           gh release upload rust-latest out/latest.json --repo "$REPO" --clobber
           echo "Mise à jour publiée : $(jq -r .version out/latest.json)"
+
+  # Annonce facultative sur Discord : seulement si le secret DISCORD_RELEASE_WEBHOOK existe
+  # (Paramètres du salon → Intégrations → Webhooks). Sans lui, rien n'est envoyé.
+  announce:
+    needs: [publish-updater, notes]
+    runs-on: ubuntu-latest
+    env:
+      WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+      NOTES: ${{ needs.notes.outputs.body }}
+      URL: https://github.com/${{ github.repository }}/releases/tag/rust-v2.0.${{ github.run_number }}
+    steps:
+      - name: Annonce Discord
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "Pas de secret DISCORD_RELEASE_WEBHOOK : pas d'annonce."
+            exit 0
+          fi
+          text=$(printf '🦀 **Launcher Rust v%s** (pré-version)\n%s\n\nTélécharger : %s\nDéjà installé ? Il se met à jour tout seul.' \
+            "$VERSION" "$(printf '%s' "$NOTES" | head -n 15)" "$URL")
+          jq -n --arg c "$text" '{content: ($c | .[0:1900]), allowed_mentions: {parse: []}}' \
+            | curl -fsS -H 'Content-Type: application/json' -d @- "$WEBHOOK"

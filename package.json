@@ -10,9 +10,11 @@
     "check:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo check --manifest-path src-tauri/Cargo.toml",
     "test:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo test --manifest-path src-tauri/Cargo.toml",
     "tauri": "tauri",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:ui": "node --test tests/ui/ui.test.mjs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.2.0"
+    "@tauri-apps/cli": "^2.2.0",
+    "playwright": "1.63.0"
   }
 }
