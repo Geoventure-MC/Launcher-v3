@@ -22,6 +22,7 @@
     fetch_news: () => [{ title: 'Article de test', link: 'https://geoventure.fr/news/1', description: 'Résumé', image: null, published: '2026-11-21T10:00:00Z', author: 'equipe' }],
     panel_get: (a) => ({
       'utils/servers-history': { points: [{ t: 1, players: 2 }, { t: 2, players: 5 }, { t: 3, players: 1 }], peakHours: [20, 21] },
+      'utils/wonder': { current: { name: 'Merveille test', theme: 'Ponts', phase: 'open', closesAt: Date.now() + 3600e3, ranking: [] }, past: [] },
       'utils/community-mods': [
         { name: 'Oculus (Shaders)', description: 'Shaders', category: 'Graphismes', author: 'Iris', version: '1.8.0', url: 'https://cdn.example/oculus.jar', filename: 'oculus.jar' },
         { name: 'Tweakerge', description: 'Outils', category: 'Utilitaires', url: 'https://cdn.example/tweak.jar' },

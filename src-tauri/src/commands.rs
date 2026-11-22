@@ -1667,3 +1667,65 @@ pub fn set_tray_settings(app: AppHandle, close_to_tray: Option<bool>, autostart:
     }
     Ok(tray_settings(app))
 }
+
+// ============================================================================
+// Télémétrie (avec l'accord du joueur) et notifications du système
+// ============================================================================
+
+/// Nom d'événement accepté par le panel (`/utils/telemetry`).
+pub fn valid_event_name(e: &str) -> bool {
+    !e.is_empty() && e.len() <= 64 && e.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
+}
+
+/// Envoie un événement anonyme au panel. L'interface ne l'appelle que si le joueur a accepté.
+/// Seuls des nombres et des booléens accompagnent l'événement : jamais de texte libre.
+#[tauri::command]
+pub async fn send_telemetry(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    event: String,
+    instance: Option<String>,
+    extra: Option<serde_json::Map<String, serde_json::Value>>,
+) -> LauncherResult<bool> {
+    if !valid_event_name(&event) {
+        return Ok(false);
+    }
+    let mut body = serde_json::Map::new();
+    for (k, v) in extra.unwrap_or_default() {
+        if k.len() <= 40 && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') && (v.is_number() || v.is_boolean()) {
+            body.insert(k, v);
+        }
+    }
+    body.insert("event".into(), event.into());
+    body.insert("serverId".into(), instance.unwrap_or_else(|| "geoventure".into()).into());
+    body.insert("launcherVersion".into(), format!("rust-{}", app.package_info().version).into());
+    body.insert("os".into(), format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH).into());
+    let panel = state.panel();
+    let url = panel.base_url().join("utils/telemetry").map_err(|e| LauncherError::InvalidUrl(e.to_string()))?;
+    let ok = tokio::time::timeout(std::time::Duration::from_secs(5), panel.http_client().post(url).json(&body).send())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    Ok(ok)
+}
+
+/// Notification du système (Windows, macOS, Linux). Ignorée si le système la refuse.
+#[tauri::command]
+pub fn desktop_notify(app: AppHandle, title: String, body: String) {
+    use tauri_plugin_notification::NotificationExt;
+    let title: String = title.chars().take(80).collect();
+    let body: String = body.chars().take(240).collect();
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    #[test]
+    fn event_names() {
+        assert!(super::valid_event_name("game_crash:out_of_memory"));
+        assert!(!super::valid_event_name("a b"));
+        assert!(!super::valid_event_name(""));
+    }
+}

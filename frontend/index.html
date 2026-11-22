@@ -182,6 +182,13 @@
               <button class="btn btn-small" id="video-open">Voir sur YouTube</button>
             </div>
 
+            <div class="card reveal hidden" id="wonder-card">
+              <h3 class="card-title">🏛️ Merveille</h3>
+              <strong id="wonder-name"></strong>
+              <p class="muted small" id="wonder-info"></p>
+              <ol class="wonder-rank" id="wonder-rank"></ol>
+            </div>
+
             <div class="card reveal" id="events-card">
               <h3 class="card-title">Événements</h3>
               <div id="game-events" class="events"><p class="muted small">Aucun événement pour le moment.</p></div>
@@ -305,6 +312,8 @@
             </label>
             <label class="toggle"><input type="checkbox" id="join-server" /><span>Se connecter directement au serveur au lancement</span></label>
             <label class="toggle"><input type="checkbox" id="reduce-motion" /><span>Réduire les animations</span></label>
+            <label class="toggle"><input type="checkbox" id="desktop-notifs" /><span>Me prévenir par une notification (maintenance, événement, plantage) quand le launcher est réduit</span></label>
+            <label class="toggle"><input type="checkbox" id="telemetry" /><span>Envoyer des statistiques anonymes (lancements, plantages, durée de démarrage) pour aider l’équipe</span></label>
             <label class="toggle"><input type="checkbox" id="discord-rpc" /><span>Afficher mon activité Geoventure sur Discord</span></label>
             <label class="toggle" id="row-close-tray"><input type="checkbox" id="close-to-tray" /><span>Fermer la fenêtre range le launcher près de l’horloge (zone de notification)</span></label>
             <label class="toggle"><input type="checkbox" id="autostart" /><span>Ouvrir le launcher au démarrage de l’ordinateur (réduit)</span></label>
@@ -466,6 +475,12 @@
       <div class="whatsnew" id="whatsnew-notes"></div>
       <div class="actions"><button class="btn btn-primary" id="whatsnew-close">C’est parti</button></div>
     </div>
+  </div>
+
+  <div id="consent" class="consent hidden" role="dialog" aria-labelledby="consent-title">
+    <strong id="consent-title">Aider à améliorer le launcher ?</strong>
+    <p class="muted small">Le launcher peut envoyer des statistiques anonymes : lancements, plantages et durée de démarrage. Jamais votre mot de passe, votre e-mail ni vos fichiers. Modifiable à tout moment dans Réglages › Jeu.</p>
+    <div class="actions"><button class="btn btn-primary btn-small" id="consent-yes">D’accord</button><button class="btn btn-small" id="consent-no">Non merci</button></div>
   </div>
 
   <div id="toast" class="toast hidden" role="status"></div>

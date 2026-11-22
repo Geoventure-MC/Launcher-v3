@@ -124,7 +124,13 @@
     'Pas de canal Test pour ce serveur.': 'No Test channel for this server.', 'Aucune actualité disponible.': 'No news available.', 'Aucune actualité pour le moment': 'No news yet',
     'En savoir plus': 'Learn more', 'Suivez les nouveautés du serveur ici.': 'Follow the server news here.',
     'Aventure & Exploration': 'Adventure & Exploration', 'RPG & Fantaisie': 'RPG & Fantasy', 'Pokémon & Combat': 'Pokémon & Battles',
-    '✨ Quoi de neuf ?': '✨ What’s new?', 'C’est parti': 'Let’s go', 'Corrections et améliorations.': 'Fixes and improvements.',
+    '✨ Quoi de neuf ?': '✨ What’s new?',
+    '🏛️ Merveille': '🏛️ Wonder', 'Bientôt': 'Soon', 'Constructions en cours': 'Building in progress', 'Jury en délibération': 'Judging', 'Résultats publiés': 'Results published',
+    'Aider à améliorer le launcher ?': 'Help improve the launcher?', 'D’accord': 'OK', 'Non merci': 'No thanks',
+    'Le launcher peut envoyer des statistiques anonymes : lancements, plantages et durée de démarrage. Jamais votre mot de passe, votre e-mail ni vos fichiers. Modifiable à tout moment dans Réglages › Jeu.':
+      'The launcher can send anonymous statistics: launches, crashes and startup time. Never your password, e-mail or files. You can change this at any time in Settings › Game.',
+    'Me prévenir par une notification (maintenance, événement, plantage) quand le launcher est réduit': 'Notify me (maintenance, event, crash) when the launcher is minimised',
+    'Envoyer des statistiques anonymes (lancements, plantages, durée de démarrage) pour aider l’équipe': 'Send anonymous statistics (launches, crashes, startup time) to help the team', 'C’est parti': 'Let’s go', 'Corrections et améliorations.': 'Fixes and improvements.',
   };
 
   const PATTERNS = [
@@ -157,6 +163,7 @@
     [/^(\d+) fichiers vérifiés · (\d+) abîmé\(s\) supprimé\(s\) · (\d+) manquant\(s\)\. Cliquez sur Jouer pour terminer\.$/, '$1 files checked · $2 damaged removed · $3 missing. Click Play to finish.'],
     [/^Impossible de changer ce mod : (.+)$/, 'Unable to change this mod: $1'], [/^Impossible : (.+)$/, 'Failed: $1'],
     [/^(\d+) \/ (\d+) · (.*)$/, (m, a, b, rest) => `${a} / ${b} · ${rest.replace(/encore ([^·]+?)(\s*·|$)/, '$1 left$2').replace(/Mo\/s/, 'MB/s').replace(/Ko\/s/, 'KB/s')}`],
+    [/^Thème : (.+)$/, 'Theme: $1'],
     [/^Processus (\d+)$/, 'Process $1'], [/^Actualité (\d+)$/, 'News $1'],
   ];
 

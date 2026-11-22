@@ -138,3 +138,36 @@ test('profil Économe : réglages légers demandés seulement avec accord', asyn
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+test('statistiques : rien sans accord, envoi après « D’accord »', async () => {
+  const { page, context, errors } = await open();
+  await page.waitForSelector('#consent:not(.hidden)', { timeout: 8000 });
+  assert.equal((await calls(page, 'send_telemetry')).length, 0);
+  await page.click('#consent-yes');
+  const [ev] = await calls(page, 'send_telemetry');
+  assert.equal(ev.event, 'launch');
+  await page.click('#btn-play');
+  await page.waitForFunction(() => window.__CALLS__.some((c) => c.cmd === 'send_telemetry' && c.args.event === 'game_launch'));
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('refus des statistiques : plus jamais demandé, rien envoyé', async () => {
+  const { page, context, errors } = await open({ settings: { telemetry: false } });
+  await page.click('#btn-play');
+  await page.waitForFunction(() => document.getElementById('play-label').textContent === 'En jeu');
+  await page.waitForTimeout(4500);
+  assert.equal(await page.isVisible('#consent'), false);
+  assert.equal((await calls(page, 'send_telemetry')).length, 0);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('merveille affichée sur l’accueil', async () => {
+  const { page, context, errors } = await open();
+  await page.waitForSelector('#wonder-card:not(.hidden)');
+  assert.equal(await page.textContent('#wonder-name'), 'Merveille test');
+  assert.match(await page.textContent('#wonder-info'), /Ponts · Constructions en cours · fin dans/);
+  assert.deepEqual(errors, []);
+  await context.close();
+});

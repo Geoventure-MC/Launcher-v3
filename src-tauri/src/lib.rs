@@ -92,6 +92,7 @@ pub fn run() {
     let start_minimized = std::env::args().any(|a| a == tray::MINIMIZED_ARG);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![tray::MINIMIZED_ARG]),
@@ -168,6 +169,8 @@ pub fn run() {
             commands::set_shader_pack,
             commands::tray_settings,
             commands::set_tray_settings,
+            commands::send_telemetry,
+            commands::desktop_notify,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du démarrage de Geoventure Launcher");

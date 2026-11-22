@@ -32,7 +32,7 @@
   };
   const settings = Object.assign({
     instance: 'geoventure', channel: 'stable', profile: null, ramMin: null, ramMax: null, jvmArgs: null,
-    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false, discordRpc: true, closeToTray: false, language: null,
+    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false, discordRpc: true, closeToTray: false, language: null, telemetry: null, desktopNotifs: true,
   }, store.get('nexus_rust_settings', {}));
   const saveSettings = () => store.set('nexus_rust_settings', settings);
   // Dossier de jeu de l'instance choisie (arguments communs des commandes Rust).
@@ -302,7 +302,7 @@
     saveSettings();
     renderServers();
     renderStatus();
-    loadConfig().then(() => { loadNotifications(); loadLauncherContent(); loadAffluence(); renderVideo(); updatePresence('launcher'); });
+    loadConfig().then(() => { loadNotifications(); loadLauncherContent(); loadAffluence(); renderVideo(); loadWonder(); updatePresence('launcher'); });
   }
 
   // ===========================================================================
@@ -411,6 +411,7 @@
     const box = $('notifications');
     let list = [];
     try { list = await invoke('panel_get', { endpoint: 'utils/notifications', instance: settings.instance, channel: settings.channel }); } catch (_) {}
+    notifyNewAnnouncements(list);
     box.replaceChildren();
     const dismissed = store.get('nexus_rust_dismissed', []);
     const now = Date.now();
@@ -765,6 +766,7 @@
 
   async function play(joinServer) {
     if (state.launching || state.gameRunning || playBlockReason()) return;
+    const launchStartedAt = Date.now();
     const cfg = state.config;
     const srv = currentServer() || {};
     state.launching = true;
@@ -798,6 +800,7 @@
       state.gameRunning = true;
       state.presenceStart = Date.now();
       updatePresence('game');
+      track('game_launch', { prepare_s: Math.round((Date.now() - launchStartedAt) / 1000) });
       $('dock-phase').textContent = '🎮 Ouverture du jeu… (le chargement des mods peut prendre une minute)';
       $('dock-pct').textContent = '';
       $('progress-fill').classList.remove('indeterminate');
@@ -808,6 +811,7 @@
     } catch (err) {
       showDock(false);
       toast(`Le lancement a échoué : ${errMsg(err)}`);
+      track('launch_error');
       uiLog('error', errMsg(err));
     } finally {
       pendingLaunch = null;
@@ -863,6 +867,8 @@
     $('crash-excerpt').textContent = a.excerpt || '';
     $('crash-excerpt').classList.toggle('hidden', !a.excerpt);
     state.lastCrashHasReport = !!a.crash_report;
+    track(`game_crash:${(a.cause && a.cause.id) || 'unknown'}`, { exit_code: Number(a.exit_code) || 0 });
+    notifyDesktop('Le jeu s’est fermé de façon inattendue', a.cause ? a.cause.title : 'Ouvrez le launcher pour lancer un diagnostic.');
     $('crash-overlay').classList.remove('hidden');
   }
   $('crash-close').addEventListener('click', () => $('crash-overlay').classList.add('hidden'));
@@ -1135,6 +1141,8 @@
     $('join-server').checked = !!settings.joinServer;
     $('reduce-motion').checked = !!settings.reduceMotion;
     $('discord-rpc').checked = settings.discordRpc !== false;
+    $('telemetry').checked = settings.telemetry === true;
+    $('desktop-notifs').checked = settings.desktopNotifs !== false;
     renderTraySettings();
     $('language').value = (window.I18N && window.I18N.lang) || 'fr';
     renderOptionalMods();
@@ -1300,6 +1308,64 @@
     return null;
   }
   $('btn-check-update').addEventListener('click', () => checkUpdate(false));
+
+  // ===========================================================================
+  // Statistiques anonymes (seulement avec l'accord du joueur) et notifications du système
+  // ===========================================================================
+  function track(event, extra) {
+    if (settings.telemetry !== true) return;
+    invoke('send_telemetry', { event, instance: settings.instance, extra: extra || null }).catch(() => {});
+  }
+  function askConsent() {
+    if (settings.telemetry !== null && settings.telemetry !== undefined) return;
+    $('consent').classList.remove('hidden');
+  }
+  function setConsent(v) {
+    settings.telemetry = v;
+    saveSettings();
+    $('consent').classList.add('hidden');
+    if ($('telemetry')) $('telemetry').checked = v;
+    if (v) track('launch');
+  }
+  $('consent-yes').addEventListener('click', () => setConsent(true));
+  $('consent-no').addEventListener('click', () => setConsent(false));
+  $('telemetry').addEventListener('change', () => setConsent($('telemetry').checked));
+  $('desktop-notifs').addEventListener('change', () => { settings.desktopNotifs = $('desktop-notifs').checked; saveSettings(); });
+
+  // Notification du système, seulement si la fenêtre n'est pas sous les yeux du joueur.
+  function notifyDesktop(title, body) {
+    if (settings.desktopNotifs === false || (document.hasFocus() && !document.hidden)) return;
+    invoke('desktop_notify', { title, body }).catch(() => {});
+  }
+  // Annonces de maintenance et d'événement : une seule notification par annonce.
+  function notifyNewAnnouncements(list) {
+    const seen = store.get('nexus_rust_notified', []);
+    const fresh = (Array.isArray(list) ? list : []).filter((n) => n && n.id != null && ['maintenance', 'event'].includes(n.type) && !seen.includes(n.id));
+    if (!fresh.length) return;
+    if (seen.length) fresh.forEach((n) => notifyDesktop(n.type === 'maintenance' ? 'Maintenance annoncée' : 'Événement Geoventure', stripTags(n.message)));
+    store.set('nexus_rust_notified', seen.concat(fresh.map((n) => n.id)).slice(-200));
+  }
+
+  // ===========================================================================
+  // Merveille (concours de construction, /utils/wonder)
+  // ===========================================================================
+  async function loadWonder() {
+    const card = $('wonder-card');
+    let data = null;
+    try { data = await invoke('panel_get', { endpoint: 'utils/wonder', instance: settings.instance, channel: settings.channel }); } catch (_) {}
+    const w = data && (data.current || (Array.isArray(data.past) && data.past[0]));
+    if (!w || !w.name) { card.classList.add('hidden'); return; }
+    const phase = { upcoming: 'Bientôt', open: 'Constructions en cours', closed: 'Jury en délibération', published: 'Résultats publiés' }[w.phase] || '';
+    const now = Date.now();
+    let when = '';
+    if (w.phase === 'upcoming' && w.opensAt > now) when = ` · ouvre dans ${formatDuration(w.opensAt - now)}`;
+    else if (w.phase === 'open' && w.closesAt > now) when = ` · fin dans ${formatDuration(w.closesAt - now)}`;
+    $('wonder-name').textContent = String(w.name);
+    $('wonder-info').textContent = [w.theme ? `Thème : ${w.theme}` : '', phase + when].filter(Boolean).join(' · ');
+    const ranking = Array.isArray(w.ranking) ? w.ranking.slice(0, 3) : [];
+    $('wonder-rank').replaceChildren(...ranking.map((r) => el('li', { text: `${r.team || '?'}${r.total != null ? ` — ${fmtNum(r.total)} pts` : ''}` })));
+    card.classList.remove('hidden');
+  }
 
   // ===========================================================================
   // Discord Rich Presence (réglages rpc_* du panel)
@@ -1573,7 +1639,8 @@
     $('preload').classList.add('done');
 
     loadStatuses(); loadNotifications(); loadGameEvents(); loadAchievements(); loadNews(); loadLauncherContent();
-    loadAffluence(); renderVideo(); updatePresence('launcher'); showWhatsNew();
+    loadAffluence(); renderVideo(); loadWonder(); updatePresence('launcher'); showWhatsNew();
+    if (settings.telemetry === true) track('launch'); else setTimeout(askConsent, 4000);
     checkUpdate(true);
     setInterval(renderGameEvents, 1000);
     setInterval(loadStatuses, 60000);
