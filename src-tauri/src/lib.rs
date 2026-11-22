@@ -62,6 +62,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::fetch_panel_config,
@@ -86,6 +87,8 @@ pub fn run() {
             commands::open_url,
             commands::open_game_dir,
             commands::repair_instance,
+            commands::check_launcher_update,
+            commands::install_launcher_update,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du démarrage de Geoventure Launcher");

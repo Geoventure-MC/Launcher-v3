@@ -1,0 +1,119 @@
+# Launcher Rust (Tauri v2) : à chaque push sur la branche `rust`, tests, build Windows/Linux,
+# puis PRÉ-VERSION GitHub `rust-v2.0.<n>` (jamais « latest » : le launcher Electron, qui ne lit
+# que les versions normales, n'est pas concerné).
+#
+# Mise à jour automatique : le launcher lit `latest.json` dans la release fixe `rust-latest`,
+# recopié ici après chaque build. Ce fichier et les installateurs sont signés avec la clé
+# du secret TAURI_SIGNING_PRIVATE_KEY (clé publique dans src-tauri/tauri.conf.json).
+name: Launcher Rust — build et pré-version
+
+on:
+  push:
+    branches: [rust]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rust-release
+  cancel-in-progress: false
+
+env:
+  VERSION: 2.0.${{ github.run_number }}
+  TAG: rust-v2.0.${{ github.run_number }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances système (WebKitGTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clé de signature présente ?
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Secret TAURI_SIGNING_PRIVATE_KEY absent (Settings → Secrets and variables → Actions). Sans lui, les mises à jour ne peuvent pas être signées."
+            exit 1
+          fi
+      - name: Dépendances système (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Numéro de version
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            c.version = process.env.VERSION;
+            fs.writeFileSync(p, JSON.stringify(c, null, 2));
+          "
+          sed -i.bak -E "0,/^version = \".*\"/s//version = \"$VERSION\"/" src-tauri/Cargo.toml
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: npx tauri
+          tagName: ${{ env.TAG }}
+          releaseName: "Launcher Rust v${{ env.VERSION }} (pré-version)"
+          releaseBody: |
+            Pré-version du nouveau launcher Geoventure (Rust / Tauri). À installer à côté du launcher actuel, qui continue de se mettre à jour normalement.
+
+            Dernier changement : ${{ github.event.head_commit.message }}
+          releaseDraft: false
+          prerelease: true
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+  publish-updater:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Recopier latest.json dans la release rust-latest
+        run: |
+          gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir out
+          if ! gh release view rust-latest --repo "$REPO" >/dev/null 2>&1; then
+            gh release create rust-latest --repo "$REPO" --prerelease --target "$GITHUB_SHA" \
+              --title "Launcher Rust : canal de mise à jour" \
+              --notes "Fichier lu par le launcher Rust pour se mettre à jour. Ne pas supprimer."
+          fi
+          gh release upload rust-latest out/latest.json --repo "$REPO" --clobber
+          echo "Mise à jour publiée : $(jq -r .version out/latest.json)"

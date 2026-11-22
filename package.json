@@ -8,7 +8,9 @@
     "build": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 npx tauri build",
     "build:release": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo build --release --manifest-path src-tauri/Cargo.toml",
     "check:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo check --manifest-path src-tauri/Cargo.toml",
-    "test:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:rust": "powershell -ExecutionPolicy Bypass -File scripts/rust-env.ps1 cargo test --manifest-path src-tauri/Cargo.toml",
+    "tauri": "tauri",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.0"

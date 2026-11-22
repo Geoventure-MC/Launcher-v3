@@ -841,3 +841,77 @@ pub fn toggle_devtools(window: WebviewWindow) {
         window.open_devtools();
     }
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LauncherUpdateInfo {
+    pub current: String,
+    pub available: bool,
+    pub version: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateDownloadProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
+/// Cherche une nouvelle version du launcher (fichier `latest.json` signé de la release `rust-latest`).
+#[tauri::command]
+pub async fn check_launcher_update(app: AppHandle) -> LauncherResult<LauncherUpdateInfo> {
+    use tauri_plugin_updater::UpdaterExt;
+    let current = app.package_info().version.to_string();
+    let updater = app
+        .updater()
+        .map_err(|e| LauncherError::Internal(format!("Mise à jour indisponible : {e}")))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| LauncherError::Internal(format!("Vérification de mise à jour impossible : {e}")))?;
+    Ok(match update {
+        Some(u) => LauncherUpdateInfo {
+            current,
+            available: true,
+            version: Some(u.version.clone()),
+            notes: u.body.clone(),
+        },
+        None => LauncherUpdateInfo {
+            current,
+            available: false,
+            version: None,
+            notes: None,
+        },
+    })
+}
+
+/// Télécharge la mise à jour (signature vérifiée), l'installe puis redémarre le launcher.
+#[tauri::command]
+pub async fn install_launcher_update(app: AppHandle, state: State<'_, AppState>) -> LauncherResult<()> {
+    use tauri_plugin_updater::UpdaterExt;
+    if state.launching.load(Ordering::SeqCst) {
+        return Err(LauncherError::Internal("Lancement du jeu en cours : mise à jour reportée.".into()));
+    }
+    let update = app
+        .updater()
+        .map_err(|e| LauncherError::Internal(e.to_string()))?
+        .check()
+        .await
+        .map_err(|e| LauncherError::Internal(e.to_string()))?;
+    let Some(update) = update else {
+        return Ok(());
+    };
+    emit_log(&app, &state.logs, LogLevel::Info, "update", format!("Mise à jour du launcher vers {}…", update.version));
+    let app_p = app.clone();
+    let mut downloaded = 0u64;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let _ = app_p.emit("launcher://update-progress", UpdateDownloadProgress { downloaded, total });
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| LauncherError::Internal(format!("Installation de la mise à jour impossible : {e}")))?;
+    app.restart();
+}
