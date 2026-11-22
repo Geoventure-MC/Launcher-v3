@@ -18,6 +18,7 @@
     { id: 'pokeland', name: 'Pokeland', description: 'Pokémon & Combat', theme_color: '#fb923c' },
   ];
   const KNOWN_ART = ['geoventure', 'elandor', 'pokeland'];
+  const LOCALE = window.I18N && window.I18N.lang === 'en' ? 'en-GB' : 'fr-FR';
   const PROFILE_NAMES = { eco: 'Économe', balanced: 'Équilibré', performance: 'Performant' };
 
   // ===========================================================================
@@ -31,7 +32,7 @@
   };
   const settings = Object.assign({
     instance: 'geoventure', channel: 'stable', profile: null, ramMin: null, ramMax: null, jvmArgs: null,
-    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false, discordRpc: true,
+    javaPath: '', resolution: 'auto', afterLaunch: 'keep', joinServer: true, reduceMotion: false, optionalMods: {}, lightGame: false, discordRpc: true, closeToTray: false, language: null,
   }, store.get('nexus_rust_settings', {}));
   const saveSettings = () => store.set('nexus_rust_settings', settings);
   // Dossier de jeu de l'instance choisie (arguments communs des commandes Rust).
@@ -70,7 +71,7 @@
   const safeHttps = (u) => { try { const x = new URL(String(u)); return x.protocol === 'https:' ? x.href : null; } catch (_) { return null; } };
   const cssUrl = (u) => `url("${String(u).replace(/["\\\n\r]/g, encodeURIComponent)}")`;
   const stripTags = (s) => String(s ?? '').replace(/<[^>]*>/g, '');
-  const fmtNum = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString('fr-FR') : String(n ?? ''));
+  const fmtNum = (n) => (Number.isFinite(Number(n)) ? Number(n).toLocaleString(LOCALE) : String(n ?? ''));
 
   let toastTimer = null;
   function toast(text) {
@@ -485,7 +486,7 @@
 
   function formatDate(ts) {
     if (!ts) return '';
-    try { return new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (_) { return ''; }
+    try { return new Date(ts).toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' }); } catch (_) { return ''; }
   }
 
   function nextHero(step) {
@@ -688,7 +689,41 @@
     $('dock-phase').textContent = p.phase === 'forge-patch' ? p.label : (PHASES[p.phase] || p.label);
     $('dock-pct').textContent = pct !== null ? `${pct} %` : '';
     const file = p.current_file && p.phase !== 'forge-patch' ? p.current_file.split('/').pop() : '';
-    $('progress-text').textContent = p.total > 0 ? `${p.completed} / ${p.total}${file ? ` · ${file}` : ''}` : 'Vérification…';
+    const rate = progressRate(p);
+    $('progress-text').textContent = p.total > 0
+      ? `${p.completed} / ${p.total}${rate ? ` · ${rate}` : ''}${file ? ` · ${file}` : ''}`
+      : 'Vérification…';
+  }
+
+  // Vitesse (moyenne glissante sur ~3 s) et temps restant estimé par étape.
+  const rateState = { phase: '', start: 0, samples: [] };
+  function progressRate(p) {
+    const now = Date.now();
+    if (p.phase !== rateState.phase || p.completed === 0) {
+      Object.assign(rateState, { phase: p.phase, start: now, samples: [] });
+      return '';
+    }
+    rateState.samples.push([now, p.bytes || 0]);
+    while (rateState.samples.length > 2 && now - rateState.samples[0][0] > 3000) rateState.samples.shift();
+    const parts = [];
+    const [t0, b0] = rateState.samples[0];
+    if (now - t0 > 500 && p.bytes > b0) parts.push(`${formatSpeed(((p.bytes - b0) * 1000) / (now - t0))}`);
+    const elapsed = now - rateState.start;
+    if (elapsed > 3000 && p.total > p.completed) {
+      const left = (elapsed / p.completed) * (p.total - p.completed);
+      parts.push(`encore ${formatLeft(left)}`);
+    }
+    return parts.join(' · ');
+  }
+  function formatSpeed(bps) {
+    if (bps >= 1048576) return `${(bps / 1048576).toFixed(1).replace('.', ',')} Mo/s`;
+    return `${Math.max(1, Math.round(bps / 1024))} Ko/s`;
+  }
+  function formatLeft(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${Math.max(1, s)} s`;
+    const m = Math.round(s / 60);
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
   }
 
   function launchRam() {
@@ -1100,6 +1135,8 @@
     $('join-server').checked = !!settings.joinServer;
     $('reduce-motion').checked = !!settings.reduceMotion;
     $('discord-rpc').checked = settings.discordRpc !== false;
+    renderTraySettings();
+    $('language').value = (window.I18N && window.I18N.lang) || 'fr';
     renderOptionalMods();
     loadCommunity();
     try { const p = await invoke('get_panel_url'); $('panel-url').value = p.current === p.default ? '' : p.current; } catch (_) {}
@@ -1288,6 +1325,30 @@
     };
     invoke('discord_presence', { presence }).catch(() => {});
   }
+  // Zone de notification et démarrage avec l'ordinateur
+  async function renderTraySettings() {
+    const t = await invoke('tray_settings').catch(() => null);
+    $('row-close-tray').classList.toggle('hidden', !(t && t.tray));
+    $('close-to-tray').checked = !!settings.closeToTray;
+    $('autostart').checked = !!(t && t.autostart);
+  }
+  $('language').addEventListener('change', () => {
+    settings.language = $('language').value;
+    saveSettings();
+    window.location.reload();
+  });
+  $('close-to-tray').addEventListener('change', () => {
+    settings.closeToTray = $('close-to-tray').checked;
+    saveSettings();
+    invoke('set_tray_settings', { closeToTray: settings.closeToTray, autostart: null }).catch(() => {});
+  });
+  $('autostart').addEventListener('change', async () => {
+    try {
+      await invoke('set_tray_settings', { closeToTray: null, autostart: $('autostart').checked });
+      toast($('autostart').checked ? 'Le launcher s’ouvrira au démarrage de l’ordinateur.' : 'Le launcher ne s’ouvrira plus au démarrage.');
+    } catch (err) { $('autostart').checked = !$('autostart').checked; toast(errMsg(err)); }
+  });
+
   $('discord-rpc').addEventListener('change', () => {
     settings.discordRpc = $('discord-rpc').checked;
     saveSettings();
@@ -1420,7 +1481,7 @@
     const shots = await invoke('list_content', { ...gameArgs(), kind: 'screenshots' }).catch(() => null);
     const sEntries = shots ? shots.entries.slice(0, 60) : [];
     $('shots').replaceChildren(...(sEntries.length ? sEntries.map((e) => {
-      const b = el('button', { class: 'shot', title: e.name }, [el('img', { src: assetUrl(e.path), alt: '', loading: 'lazy' }), el('span', { text: new Date(e.modified_ms).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) })]);
+      const b = el('button', { class: 'shot', title: e.name }, [el('img', { src: assetUrl(e.path), alt: '', loading: 'lazy' }), el('span', { text: new Date(e.modified_ms).toLocaleString(LOCALE, { dateStyle: 'short', timeStyle: 'short' }) })]);
       b.addEventListener('click', () => invoke('open_content', { ...gameArgs(), kind: 'screenshots', name: e.name }).catch((err) => toast(errMsg(err))));
       return b;
     }) : [el('p', { class: 'muted small', text: 'Aucune capture pour le moment.' })]));
@@ -1486,6 +1547,7 @@
       on('launcher://launch-result', (e) => onLaunchResult(e.payload)),
       on('launcher://game-exit', (e) => onGameExit(e.payload)),
       on('launcher://game-crash', (e) => onGameCrash(e.payload)),
+      on('launcher://tray-play', () => play(settings.joinServer)),
       on('launcher://game-slow', () => toast('🐢 Le jeu met longtemps à s’ouvrir. Patientez encore un peu ; s’il n’apparaît pas, lancez un diagnostic.')),
       on('launcher://update-progress', (e) => { const p = e.payload || {}; $('update-fill').style.width = `${p.total ? Math.round((p.downloaded / p.total) * 100) : 0}%`; }),
       on('launcher://update-error', (e) => { $('update-overlay').classList.add('hidden'); toast(`Mise à jour impossible : ${e.payload}`); }),
@@ -1497,6 +1559,7 @@
     renderServers();
     renderChannel();
     await listenAll();
+    invoke('set_tray_settings', { closeToTray: !!settings.closeToTray, autostart: null }).catch(() => {});
     try { if (T.app) $('launcher-version').textContent = `Geoventure Launcher ${await T.app.getVersion()}`; } catch (_) {}
     (await invoke('get_logs').catch(() => [])).forEach(appendLogLine);
     try { const gs = await invoke('game_status'); state.gameRunning = !!(gs && gs.running); } catch (_) {}

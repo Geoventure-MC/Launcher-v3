@@ -47,6 +47,8 @@ pub struct InstallProgress {
     pub completed: usize,
     pub total: usize,
     pub current_file: String,
+    /// Octets téléchargés depuis le début de l'étape (vitesse affichée par l'interface).
+    pub bytes: u64,
 }
 
 pub type ProgressFn = Arc<dyn Fn(InstallProgress) + Send + Sync>;
@@ -174,6 +176,7 @@ impl Installer {
             completed: p.completed,
             total: p.total,
             current_file: p.current_file.clone(),
+            bytes: p.downloaded_bytes,
         });
     }
 
@@ -184,6 +187,7 @@ impl Installer {
             completed: 0,
             total: 0,
             current_file: String::new(),
+            bytes: 0,
         });
     }
 
@@ -712,6 +716,7 @@ impl Installer {
                 completed: idx,
                 total,
                 current_file: task.clone(),
+                bytes: 0,
             });
 
             if !outputs.is_empty() && outputs_ok(&outputs) {

@@ -15,12 +15,14 @@ pub mod gpu;
 pub mod gameopts;
 pub mod discord;
 pub mod media;
+pub mod tray;
 
 use commands::AppState;
 use config::PanelClient;
 use directories::{BaseDirs, ProjectDirs};
 use logs::{LogLevel, LogStore};
 use std::path::PathBuf;
+use tauri::Manager;
 
 /// Résout `(cache_dir, session_dir, data_root_dir)` en conservant le chemin historique `%APPDATA%\.Nexus` de Launcher-v3.
 fn resolve_directories() -> (PathBuf, PathBuf, PathBuf) {
@@ -87,8 +89,34 @@ pub fn run() {
         log_dir,
     };
 
+    let start_minimized = std::env::args().any(|a| a == tray::MINIMIZED_ARG);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![tray::MINIMIZED_ARG]),
+        ))
+        .setup(move |app| {
+            if let Err(e) = tray::setup(app.handle()) {
+                eprintln!("Icône de notification indisponible : {e}");
+            }
+            // Démarrage avec l'ordinateur : rangé dans la zone de notification (si elle existe).
+            if start_minimized && tray::TRAY_OK.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use std::sync::atomic::Ordering;
+                if tray::CLOSE_TO_TRAY.load(Ordering::SeqCst) && tray::TRAY_OK.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
@@ -138,6 +166,8 @@ pub fn run() {
             commands::delete_content,
             commands::open_content,
             commands::set_shader_pack,
+            commands::tray_settings,
+            commands::set_tray_settings,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du démarrage de Geoventure Launcher");

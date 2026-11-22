@@ -306,6 +306,14 @@
             <label class="toggle"><input type="checkbox" id="join-server" /><span>Se connecter directement au serveur au lancement</span></label>
             <label class="toggle"><input type="checkbox" id="reduce-motion" /><span>Réduire les animations</span></label>
             <label class="toggle"><input type="checkbox" id="discord-rpc" /><span>Afficher mon activité Geoventure sur Discord</span></label>
+            <label class="toggle" id="row-close-tray"><input type="checkbox" id="close-to-tray" /><span>Fermer la fenêtre range le launcher près de l’horloge (zone de notification)</span></label>
+            <label class="toggle"><input type="checkbox" id="autostart" /><span>Ouvrir le launcher au démarrage de l’ordinateur (réduit)</span></label>
+            <label class="field"><span>Langue / Language</span>
+              <select id="language">
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+              </select>
+            </label>
           </div>
         </div>
 
@@ -461,6 +469,7 @@
   </div>
 
   <div id="toast" class="toast hidden" role="status"></div>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

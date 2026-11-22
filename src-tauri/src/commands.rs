@@ -664,6 +664,7 @@ async fn run_launch(
             completed: 0,
             total: 0,
             current_file: String::new(),
+            bytes: 0,
         },
     );
     let mut ignored = req.ignored.clone();
@@ -689,6 +690,7 @@ async fn run_launch(
                             completed: p.completed,
                             total: p.total,
                             current_file: p.current_file,
+                            bytes: p.downloaded_bytes,
                         },
                     );
                 },
@@ -780,6 +782,7 @@ async fn run_launch(
             completed: 1,
             total: 1,
             current_file: String::new(),
+            bytes: 0,
         },
     );
     emit_log(
@@ -1634,4 +1637,33 @@ pub fn set_shader_pack(
     }
     let game_dir = game_dir_of(&state, &data_directory, instance.as_deref(), channel.as_deref());
     crate::media::set_shader(&game_dir, pack.as_deref())
+}
+
+// ============================================================================
+// Lot 3 : zone de notification, démarrage avec l'ordinateur
+// ============================================================================
+
+/// État : icône disponible, fermeture vers la zone de notification, démarrage automatique.
+#[tauri::command]
+pub fn tray_settings(app: AppHandle) -> serde_json::Value {
+    use tauri_plugin_autostart::ManagerExt;
+    serde_json::json!({
+        "tray": crate::tray::TRAY_OK.load(Ordering::SeqCst),
+        "close_to_tray": crate::tray::CLOSE_TO_TRAY.load(Ordering::SeqCst),
+        "autostart": app.autolaunch().is_enabled().unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+pub fn set_tray_settings(app: AppHandle, close_to_tray: Option<bool>, autostart: Option<bool>) -> LauncherResult<serde_json::Value> {
+    use tauri_plugin_autostart::ManagerExt;
+    if let Some(v) = close_to_tray {
+        crate::tray::CLOSE_TO_TRAY.store(v, Ordering::SeqCst);
+    }
+    if let Some(v) = autostart {
+        let al = app.autolaunch();
+        let r = if v { al.enable() } else { al.disable() };
+        r.map_err(|e| LauncherError::Internal(format!("Démarrage automatique : {e}")))?;
+    }
+    Ok(tray_settings(app))
 }
