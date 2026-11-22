@@ -368,3 +368,23 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    /// Session écrite par la dernière version de l'ancien launcher (windows/rustSwitch.js).
+    #[tokio::test]
+    async fn reads_session_written_by_old_launcher() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            account_session_path(tmp.path()),
+            r##"{"id":0,"username":"Bob","uuid":"u","access_token":"t","email_verified":true,"money":5,"banned":false,"role":{"name":"VIP","color":"#fff","is_admin":false},"site_url":"https://geoventure.fr/","skin_url":null}"##,
+        )
+        .unwrap();
+        let acc = load_account_session(tmp.path()).await.unwrap().unwrap();
+        assert_eq!(acc.username, "Bob");
+        assert_eq!(acc.access_token, "t");
+        assert_eq!(acc.role.unwrap().name, "VIP");
+    }
+}
