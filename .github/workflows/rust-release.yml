@@ -8,7 +8,7 @@
 # Mise à jour automatique : le launcher lit `latest.json` dans la release fixe `rust-latest`,
 # recopié ici après chaque build. Ce fichier et les installateurs sont signés avec la clé
 # du secret TAURI_SIGNING_PRIVATE_KEY (clé publique dans src-tauri/tauri.conf.json).
-name: Launcher Rust — build et pré-version
+name: Launcher Geoventure — build et publication
 
 on:
   push:
@@ -62,11 +62,18 @@ jobs:
       - name: Notes de version (titres des commits depuis la pré-version précédente)
         id: notes
         run: |
-          prev=$(git tag --list 'rust-v*' --sort=-version:refname | head -n 1)
+          # Dernière version Rust présente dans l'historique de ce commit (les anciennes, faites sur
+          # une autre branche, ne comptent pas : sinon tout l'historique remonterait).
+          prev=""
+          for t in $(git tag --list 'rust-v*' --sort=-version:refname); do
+            if git merge-base --is-ancestor "$t" HEAD; then prev="$t"; break; fi
+          done
           range=${prev:+$prev..}HEAD
+          [ -z "$prev" ] && range="HEAD~1..HEAD"
           {
             echo "body<<FIN_DES_NOTES"
-            git log --no-merges --format='- %s' $range -- . ':(exclude)*.md' | head -n 40
+            git log --no-merges --format='- %s' $range -- . ':(exclude)*.md' \
+              | grep -v -e '\[skip ci\]' -e '^- Publication de la version' | head -n 30
             echo "FIN_DES_NOTES"
           } >> "$GITHUB_OUTPUT"
 
