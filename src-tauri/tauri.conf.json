@@ -30,7 +30,9 @@
     "targets": [
       "nsis",
       "appimage",
-      "deb"
+      "deb",
+      "app",
+      "dmg"
     ],
     "icon": [
       "icons/icon.png",
@@ -48,7 +50,10 @@
     },
     "createUpdaterArtifacts": true,
     "publisher": "Geoventure",
-    "shortDescription": "Launcher Geoventure"
+    "shortDescription": "Launcher Geoventure",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   },
   "plugins": {
     "updater": {

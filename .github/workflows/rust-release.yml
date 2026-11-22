@@ -1,4 +1,4 @@
-# Launcher Rust (Tauri v2) : à chaque push sur la branche `rust`, tests, build Windows/Linux,
+# Launcher Rust (Tauri v2) : à chaque push sur la branche `rust`, tests, build Windows/Linux/macOS,
 # puis PRÉ-VERSION GitHub `rust-v2.0.<n>` (jamais « latest » : le launcher Electron, qui ne lit
 # que les versions normales, n'est pas concerné).
 #
@@ -45,7 +45,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        include:
+          - os: windows-latest
+            args: ""
+          - os: ubuntu-22.04
+            args: ""
+          # Une seule app pour les Mac Intel et Apple Silicon.
+          - os: macos-latest
+            args: "--target universal-apple-darwin"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +74,8 @@ jobs:
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -80,7 +89,8 @@ jobs:
             c.version = process.env.VERSION;
             fs.writeFileSync(p, JSON.stringify(c, null, 2));
           "
-          sed -i.bak -E "0,/^version = \".*\"/s//version = \"$VERSION\"/" src-tauri/Cargo.toml
+          # perl plutôt que sed : la syntaxe « 0,/motif/ » de GNU sed n'existe pas sur macOS.
+          perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' src-tauri/Cargo.toml
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -89,6 +99,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: npx tauri
+          args: ${{ matrix.args }}
           tagName: ${{ env.TAG }}
           releaseName: "Launcher Rust v${{ env.VERSION }} (pré-version)"
           releaseBody: |
