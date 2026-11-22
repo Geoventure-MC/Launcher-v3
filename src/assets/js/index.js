@@ -23,6 +23,39 @@ function cacheKey() {
     const slug = ls('geoventure_selected_instance') || 'default';
     return 'geoventure_config_cache_' + slug + (ls('geoventure_selected_channel') === 'test' ? '_test' : '');
 }
+// Compte connecté dans ce launcher (IndexedDB « database », même origine que la fenêtre principale).
+// Lecture seule : si la base n'existe pas, son ouverture est annulée pour ne jamais en créer une vide.
+function genKey(str) {
+    let key = 0;
+    for (const c of String(str).split('')) key = (((key << 5) - key) + c.charCodeAt()) & 0xFFFFFFFF;
+    return key;
+}
+function readSelectedAccount() {
+    return new Promise((resolve) => {
+        let req;
+        try { req = indexedDB.open('database'); } catch { return resolve(null); }
+        req.onupgradeneeded = (e) => { e.target.transaction.abort(); };
+        req.onerror = () => resolve(null);
+        req.onsuccess = (e) => {
+            const db = e.target.result;
+            const done = (v) => { try { db.close(); } catch { /* déjà fermée */ } resolve(v); };
+            try {
+                if (!db.objectStoreNames.contains('accounts') || !db.objectStoreNames.contains('accounts-selected')) return done(null);
+                const tx = db.transaction(['accounts', 'accounts-selected'], 'readonly');
+                const sel = tx.objectStore('accounts-selected').get(genKey('1234'));
+                sel.onsuccess = () => {
+                    const uuid = sel.result && sel.result.value && sel.result.value.selected;
+                    if (!uuid) return done(null);
+                    const acc = tx.objectStore('accounts').get(genKey(uuid));
+                    acc.onsuccess = () => done((acc.result && acc.result.value) || null);
+                    acc.onerror = () => done(null);
+                };
+                sel.onerror = () => done(null);
+            } catch { done(null); }
+        };
+    });
+}
+
 const config = {
     async GetConfig() {
         try {
@@ -179,6 +212,9 @@ class Splash {
     async maintenanceCheck() {
         if (this.started) return; // idempotent : erreur de mise à jour + « pas de mise à jour » ne démarrent qu'une fois
         this.started = true;
+        // Le launcher Geoventure est désormais le launcher Rust : on l'installe et on l'ouvre. En cas d'échec,
+        // on continue avec celui-ci.
+        if (await this.switchToRust()) return;
         // En maintenance, on n'arrête plus le launcher : on l'ouvre normalement
         // et le panneau d'accueil affiche le bandeau + bloque le bouton Jouer
         // (voir initMaintenance() dans panels/home.js). Seule une vraie erreur
@@ -191,6 +227,32 @@ class Splash {
         })
     }
 
+
+    async switchToRust() {
+        try {
+            this.setStatus('Passage au nouveau launcher Geoventure…');
+            api.onSwitchStatus((s) => {
+                const pct = s.total > 0 ? ` ${Math.round((s.got / s.total) * 100)} %` : '';
+                this.setStatus(esc(s.text) + pct);
+                if (s.total > 0) {
+                    if (!this.progress.classList.contains('show')) this.toggleProgress();
+                    this.setProgress(s.got, s.total);
+                }
+            });
+            let siteUrl = null;
+            try { const c = await config.GetConfig(); siteUrl = c && c.azauth; } catch { /* site par défaut */ }
+            const res = await api.switchToRust({ account: await readSelectedAccount(), siteUrl });
+            if (res && res.ok) {
+                this.setStatus('Le nouveau launcher Geoventure s’ouvre…');
+                return true;
+            }
+            console.error('Passage au nouveau launcher impossible :', res && res.error);
+        } catch (err) {
+            console.error('Passage au nouveau launcher impossible :', err && err.message ? err.message : err);
+        }
+        if (this.progress.classList.contains('show')) this.toggleProgress();
+        return false;
+    }
 
     startLauncher() {
         this.setStatus(`Démarrage du launcher`);

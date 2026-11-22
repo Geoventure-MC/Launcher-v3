@@ -41,4 +41,14 @@ contextBridge.exposeInMainWorld('nexusUpdate', {
     closeWindow: () => ipcRenderer.send('update-window-close'),
     devTools: () => ipcRenderer.send('update-window-dev-tools'),
     openExternal: (url) => ipcRenderer.send('open-external', String(url)),
+    // Passage au nouveau launcher (Rust)
+    switchToRust: (opts) => {
+        const o = opts && typeof opts === 'object' ? opts : {};
+        return ipcRenderer.invoke('rust-switch', { account: o.account || null, siteUrl: typeof o.siteUrl === 'string' ? o.siteUrl : null });
+    },
+    onSwitchStatus: listen('rust-switch-status', (s) => ({
+        text: String((s && s.text) || ''),
+        got: Number(s && s.got) || 0,
+        total: Number(s && s.total) || 0,
+    })),
 });

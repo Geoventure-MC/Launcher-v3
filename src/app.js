@@ -177,6 +177,21 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
 });
 
+// Passage au nouveau launcher (Rust) : voir assets/js/windows/rustSwitch.js. L'ancien ne se ferme que
+// si le nouveau a bien été ouvert ; sinon il démarre comme avant.
+ipcMain.handle('rust-switch', async (event, opts) => {
+    if (dev) return { ok: false, error: 'développement' };
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const send = (s) => { try { event.sender.send('rust-switch-status', s); } catch { /* fenêtre fermée */ } };
+    const res = await require('./assets/js/windows/rustSwitch.js').switchToRust({
+        account: o.account && typeof o.account === 'object' ? o.account : null,
+        siteUrl: typeof o.siteUrl === 'string' ? o.siteUrl : null,
+        onStatus: send,
+    });
+    if (res.ok) setTimeout(() => app.quit(), 1500);
+    return res;
+});
+
 autoUpdater.autoDownload = false;
 
 ipcMain.handle('update-app', async () => {
