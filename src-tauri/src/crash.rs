@@ -24,6 +24,20 @@ pub struct CrashAnalysis {
 
 /// Règles dans l'ordre : la première trouvée l'emporte (la plus précise d'abord).
 const RULES: &[(&[&str], CrashCause)] = &[
+    // Mémoire du PC épuisée (RAM et fichier d'échange), à ne pas confondre avec un tas Java trop petit :
+    // ici, donner plus de RAM au jeu aggrave le problème.
+    (
+        &[
+            "insufficient memory for the Java Runtime Environment",
+            "Native memory allocation (",
+            "Failed to commit memory (",
+        ],
+        CrashCause {
+            id: "system_memory",
+            title: "Le PC n'a plus de mémoire libre",
+            advice: "Fermez les autres programmes (navigateur, Discord…) puis relancez. Si ça recommence, baissez la RAM du jeu dans Performance et libérez de la place sur le disque système (fichier d'échange de Windows).",
+        },
+    ),
     (
         &["Could not reserve enough space", "Invalid maximum heap size", "Initial heap size set to a larger value"],
         CrashCause {
@@ -57,7 +71,7 @@ const RULES: &[(&[&str], CrashCause)] = &[
         },
     ),
     (
-        &["Missing or unsupported mandatory dependencies", "ModResolutionException", "requires", "Mod File: "],
+        &["Missing or unsupported mandatory dependencies", "ModResolutionException"],
         CrashCause {
             id: "mod_dependency",
             title: "Un mod n'a pas ce qu'il lui faut",
@@ -109,11 +123,7 @@ const RULES: &[(&[&str], CrashCause)] = &[
 /// Cherche la cause la plus probable dans un texte (rapport de plantage ou fin du journal).
 pub fn analyze_text(text: &str) -> Option<(CrashCause, String)> {
     for (needles, cause) in RULES {
-        // `requires` seul est trop vague : on l'exige à côté d'un message de dépendance de Forge.
         for needle in needles.iter() {
-            if *needle == "requires" && !text.contains("Missing or unsupported mandatory dependencies") {
-                continue;
-            }
             if let Some(line) = text.lines().find(|l| l.contains(needle)) {
                 return Some((cause.clone(), line.trim().chars().take(300).collect()));
             }
@@ -196,6 +206,22 @@ mod tests {
         assert!(analyze_text("This feature requires a restart").is_none());
         let (c, _) = analyze_text("Missing or unsupported mandatory dependencies:\n\tMod ID: 'geckolib', Requested by: 'geomods'").unwrap();
         assert_eq!(c.id, "mod_dependency");
+    }
+
+    #[test]
+    fn system_memory_is_not_blamed_on_a_mod() {
+        // Journal réel d'un PC à court de mémoire, avec l'avertissement normal de Forge au démarrage.
+        let log = "[main/WARN] [JarSelector/]: Attempted to select a dependency jar for JarJar which was passed in as source: geckolib. Using Mod File: geckolib.jar
+                   [30.004s][error][gc] Failed to commit memory (1455)
+                   # There is insufficient memory for the Java Runtime Environment to continue.";
+        assert_eq!(analyze_text(log).unwrap().0.id, "system_memory");
+        let native = "# Native memory allocation (malloc) failed to allocate 1069392 bytes. Error detail: Chunk::new";
+        assert_eq!(analyze_text(native).unwrap().0.id, "system_memory");
+    }
+
+    #[test]
+    fn jar_selector_warning_is_not_a_crash_cause() {
+        assert!(analyze_text("[JarSelector/]: Attempted to select a dependency jar. Using Mod File: geckolib.jar").is_none());
     }
 
     #[test]

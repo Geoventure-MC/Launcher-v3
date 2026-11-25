@@ -810,6 +810,9 @@ async fn run_launch(
     let window_seen = Arc::new(AtomicBool::new(false));
     let win_hide = window.clone();
     let window_seen_watch = Arc::clone(&window_seen);
+    // Propre à ce lancement : l'alerte d'une partie fermée ne doit pas sortir pendant la suivante.
+    let exited = Arc::new(AtomicBool::new(false));
+    let exited_watch = Arc::clone(&exited);
     let started_at = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
     let game_dir_exit = game_dir.clone();
     let killed_exit = Arc::clone(&state.kill_requested);
@@ -823,16 +826,17 @@ async fn run_launch(
         move |entry| {
             // « Cacher le launcher » : seulement quand une fenêtre du jeu est vraiment à l'écran
             // (fenêtre de chargement de Forge ou de Minecraft), jamais avant.
-            if hide_on_window
-                && !window_seen.load(Ordering::SeqCst)
-                && is_game_window_line(&entry.message)
-            {
+            // La fenêtre est notée dans tous les modes : l'alerte des 3 minutes en dépend.
+            if !window_seen.load(Ordering::SeqCst) && is_game_window_line(&entry.message) {
                 window_seen.store(true, Ordering::SeqCst);
-                let _ = win_hide.hide();
+                if hide_on_window {
+                    let _ = win_hide.hide();
+                }
             }
             let _ = app_log.emit("launcher://log", entry);
         },
         move |code| {
+            exited.store(true, Ordering::SeqCst);
             running_exit.store(false, Ordering::SeqCst);
             let entry = logs_exit.push(
                 if code == Some(0) { LogLevel::Info } else { LogLevel::Warn },
@@ -882,7 +886,7 @@ async fn run_launch(
         let running_w = Arc::clone(&state.game_running);
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(180)).await;
-            if running_w.load(Ordering::SeqCst) && !window_seen_watch.load(Ordering::SeqCst) {
+            if running_w.load(Ordering::SeqCst) && !exited_watch.load(Ordering::SeqCst) && !window_seen_watch.load(Ordering::SeqCst) {
                 let entry = logs_w.push(
                     LogLevel::Warn,
                     "launch",
@@ -1423,10 +1427,9 @@ pub async fn collect_diagnostic(app: AppHandle, state: State<'_, AppState>, req:
     let _ = writeln!(r, "{}", tail_lines(&state.logs.export_text(), 300));
     let _ = writeln!(r, "\n--- logs/latest.log du jeu (300 dernières lignes) ---");
     let _ = writeln!(r, "{}", tail_file(&game_dir.join("logs/latest.log"), 300).unwrap_or_else(|| "(absent)".into()));
-    let crash = std::fs::read_dir(game_dir.join("crash-reports")).ok().and_then(|d| {
-        d.flatten().max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok()).map(|e| e.path())
-    });
-    if let Some(c) = crash {
+    // Un vieux rapport fait chercher au mauvais endroit : seuls ceux des dernières 24 h sont joints.
+    let since = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
+    if let Some(c) = crate::crash::crash_report_since(&game_dir, since) {
         let _ = writeln!(r, "\n--- Dernier rapport de plantage : {} ---", c.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
         let head = std::fs::read_to_string(&c).map(|t| t.lines().take(80).collect::<Vec<_>>().join("\n")).unwrap_or_default();
         let _ = writeln!(r, "{head}");
