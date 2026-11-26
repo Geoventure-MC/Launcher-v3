@@ -181,3 +181,136 @@ test('réglages du panel : logo, fond du grade, auteur de la citation, argent', 
   assert.deepEqual(errors, []);
   await context.close();
 });
+
+// ---- Plusieurs comptes ------------------------------------------------------------------
+const ACCOUNTS = `accounts: { active: 'geoventure.fr#1', accounts: [
+  { key: 'geoventure.fr#1', id: 1, username: 'Testeur', skin_url: null, site_url: 'https://geoventure.fr/', role: null, active: true, needs_login: false },
+  { key: 'geoventure.fr#2', id: 2, username: 'Alice', skin_url: null, site_url: 'https://geoventure.fr/', role: null, active: false, needs_login: false },
+  { key: 'geoventure.fr#3', id: 3, username: 'Vieux', skin_url: null, site_url: 'https://geoventure.fr/', role: null, active: false, needs_login: true },
+] }`;
+const openAccounts = async (page) => { await page.click('.nav-btn[data-tab="game"]'); await page.click('.tab[data-tab="advanced"]'); };
+const accountRow = (page, name) => page.locator('#account-list .account', { hasText: name });
+
+test('comptes : liste avec compte actif et reconnexion requise', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS });
+  await openAccounts(page);
+  assert.equal(await page.locator('#account-list .account').count(), 3);
+  assert.match(await accountRow(page, 'Testeur').textContent(), /Actif/);
+  assert.equal(await accountRow(page, 'Testeur').locator('button:has-text("Utiliser")').count(), 0);
+  assert.match(await accountRow(page, 'Vieux').textContent(), /Reconnexion requise/);
+  assert.equal(await accountRow(page, 'Alice').locator('button:has-text("Utiliser")').count(), 1);
+  assert.equal(await page.locator('#login-screen').isVisible(), false);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : « Utiliser » change de compte, le jeu part avec le nouveau pseudo', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS });
+  await openAccounts(page);
+  await accountRow(page, 'Alice').locator('button:has-text("Utiliser")').click();
+  await page.waitForFunction(() => document.getElementById('profile-name').textContent === 'Alice');
+  assert.deepEqual(await calls(page, 'azuriom_switch_account'), [{ key: 'geoventure.fr#2' }]);
+  assert.match(await accountRow(page, 'Alice').textContent(), /Actif/);
+  assert.doesNotMatch(await accountRow(page, 'Testeur').textContent(), /Actif/);
+  await page.click('#btn-play');
+  await page.waitForFunction(() => window.__CALLS__.some((c) => c.cmd === 'launch_instance'));
+  const [launch] = await calls(page, 'launch_instance');
+  assert.equal(launch.req.username, 'Alice');
+  assert.equal(launch.req.uuid, 'uuid-Alice');
+  assert.equal(launch.req.access_token, 'jeton-Alice');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : pas de changement de compte pendant la partie', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS });
+  await page.click('#btn-play');
+  await page.waitForFunction(() => document.getElementById('play-label').textContent === 'En jeu');
+  await openAccounts(page);
+  assert.equal(await accountRow(page, 'Alice').locator('button:has-text("Utiliser")').isDisabled(), true);
+  assert.equal(await page.isDisabled('#btn-add-account'), true);
+  assert.equal((await calls(page, 'azuriom_switch_account')).length, 0);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : session refusée, le compte est marqué et la reconnexion proposée', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS.replace('accounts:', "refusedKeys: ['geoventure.fr#2'], accounts:") });
+  await openAccounts(page);
+  await accountRow(page, 'Alice').locator('button:has-text("Utiliser")').click();
+  await page.waitForSelector('#login-screen:not(.hidden)');
+  assert.equal(await page.inputValue('#az-email'), 'Alice');
+  assert.match(await page.textContent('#az-status'), /Reconnexion requise pour Alice/);
+  // « Annuler » revient au compte actif, qui n'a pas changé.
+  await page.click('#btn-login-cancel');
+  assert.equal(await page.locator('#login-screen').isVisible(), false);
+  assert.equal(await page.textContent('#profile-name'), 'Testeur');
+  assert.match(await accountRow(page, 'Alice').textContent(), /Reconnexion requise/);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : « Retirer » demande confirmation', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS });
+  await openAccounts(page);
+  await accountRow(page, 'Alice').locator('button:has-text("Retirer")').click();
+  assert.equal((await calls(page, 'azuriom_remove_account')).length, 0);
+  await accountRow(page, 'Alice').locator('button:has-text("Confirmer")').click();
+  await page.waitForFunction(() => document.querySelectorAll('#account-list .account').length === 2);
+  assert.deepEqual(await calls(page, 'azuriom_remove_account'), [{ key: 'geoventure.fr#2' }]);
+  assert.equal(await page.textContent('#profile-name'), 'Testeur');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : « Ajouter un compte » garde les autres, « Annuler » revient au compte actif', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS });
+  await openAccounts(page);
+  await page.click('#btn-add-account');
+  await page.waitForSelector('#login-screen:not(.hidden)');
+  assert.equal(await page.locator('#login-account-list .account').count(), 3);
+  assert.equal(await page.inputValue('#az-email'), '');
+  await page.click('#btn-login-cancel');
+  assert.equal(await page.locator('#login-screen').isVisible(), false);
+  assert.equal(await page.textContent('#profile-name'), 'Testeur');
+  // Nouvelle connexion : le nouveau compte s'ajoute et devient actif.
+  await page.click('#btn-add-account');
+  await page.fill('#az-email', 'Bob');
+  await page.fill('#az-password', 'secret');
+  await page.click('#btn-login');
+  await page.waitForFunction(() => document.getElementById('profile-name').textContent === 'Bob');
+  assert.equal(await page.locator('#login-screen').isVisible(), false);
+  assert.equal(await page.locator('#account-list .account').count(), 4);
+  assert.match(await accountRow(page, 'Bob').textContent(), /Actif/);
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : déconnexion du compte actif seulement, les autres sont proposés d’un clic', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS });
+  await openAccounts(page);
+  await page.click('#btn-logout');
+  await page.waitForSelector('#login-screen:not(.hidden)');
+  // Aucun autre compte n'est activé d'office ; pas d'« Annuler » sans compte actif.
+  assert.equal(await page.locator('#btn-login-cancel').isVisible(), false);
+  assert.equal(await page.locator('#login-account-list .account').count(), 2);
+  assert.equal(await page.locator('#login-account-list .account.active').count(), 0);
+  assert.equal(await page.isDisabled('#btn-play'), true);
+  await page.locator('#login-account-list .account', { hasText: 'Alice' }).click();
+  await page.waitForSelector('#login-screen', { state: 'hidden' });
+  assert.equal(await page.textContent('#profile-name'), 'Alice');
+  assert.deepEqual(errors, []);
+  await context.close();
+});
+
+test('comptes : au démarrage sans compte actif mais des comptes gardés, ils sont proposés', async () => {
+  const { page, context, errors } = await open({ mockSrc: ACCOUNTS.replace("active: 'geoventure.fr#1'", 'active: null').replace('active: true', 'active: false') });
+  assert.equal(await page.locator('#login-screen').isVisible(), true);
+  assert.equal(await page.locator('#login-account-list .account').count(), 3);
+  // Compte à reconnecter : le formulaire est prérempli avec son pseudo.
+  await page.locator('#login-account-list .account', { hasText: 'Vieux' }).click();
+  assert.equal(await page.inputValue('#az-email'), 'Vieux');
+  assert.equal(await page.isDisabled('#btn-play'), true);
+  assert.deepEqual(errors, []);
+  await context.close();
+});

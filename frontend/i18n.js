@@ -32,6 +32,12 @@
     'Vérifiez d’abord votre adresse e-mail sur le site.': 'Verify your e-mail address on the website first.',
     'Vérifiez votre adresse e-mail sur le site pour jouer.': 'Verify your e-mail address on the website to play.',
     'Accès réservé (liste blanche).': 'Restricted access (whitelist).',
+    // Comptes enregistrés
+    'Comptes enregistrés': 'Saved accounts', 'Annuler': 'Cancel', 'Utiliser': 'Use', 'Se reconnecter': 'Sign in again',
+    'Reconnexion requise': 'Sign-in required', '＋ Ajouter un compte': '＋ Add an account', 'Compte inconnu.': 'Unknown account.',
+    'Déconnecte le compte actif ; les autres comptes restent enregistrés': 'Signs out the active account; the other accounts stay saved',
+    'Fermez d’abord le jeu avant de changer de compte.': 'Close the game before switching accounts.',
+    'Session expirée : reconnexion requise pour ce compte.': 'Session expired: this account needs to sign in again.',
     // Profil
     'Profil et succès': 'Profile and achievements', 'Succès': 'Achievements', 'lancements': 'launches', 'de jeu': 'played',
     'points de succès': 'achievement points', 'Classement': 'Leaderboard', 'Saison': 'Season', 'Factions': 'Factions', 'Faction': 'Faction',
@@ -136,6 +142,9 @@
   const PATTERNS = [
     [/^(.+) installé : il sera chargé au prochain lancement\.$/, '$1 installed: it will load on next launch.'],
     [/^(.+) retiré\.$/, '$1 removed.'],
+    [/^Compte actif : (.+)$/, 'Active account: $1'],
+    [/^Reconnexion requise pour (.+) : entrez son mot de passe\.$/, 'Sign-in required for $1: enter their password.'],
+    [/^Limite de (\d+) comptes atteinte : retirez-en un avant d[’'] ?ajouter\.$/, 'Limit of $1 accounts reached: remove one before adding another.'],
     [/^Profil (.+) appliqué : (.+) Go\.$/, (m, p, r) => `${tr(p)} profile applied: ${r} GB.`],
     [/^Profil conseillé pour ce PC : (.+?)\. Le jeu n’utilisera jamais plus de 60 % de la mémoire \((.+) Go\)\.(.*)$/,
       (m, p, g, rest) => `Recommended profile for this PC: ${tr(p)}. The game will never use more than 60% of memory (${g} GB).${rest ? ' Integrated graphics: tick “lighten the game settings” for smoother play.' : ''}`],

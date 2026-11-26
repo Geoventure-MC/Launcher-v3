@@ -553,3 +553,21 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
 .wonder-rank li { margin: 2px 0; }
 .consent { position: fixed; left: 104px; bottom: 20px; z-index: 60; max-width: 380px; padding: 16px; border-radius: 14px; background: rgba(17,22,29,.96); border: 1px solid rgba(255,255,255,.12); box-shadow: 0 12px 40px rgba(0,0,0,.5); }
 .consent p { margin: 6px 0 10px; }
+
+/* ------------------------------------------------------------------ Comptes enregistrés */
+.account-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.account { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: var(--r-sm); background: rgba(255, 255, 255, .04); }
+.account.active { background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .5); }
+.account.stale { box-shadow: inset 0 0 0 1px rgba(251, 191, 36, .45); }
+.account.pickable { cursor: pointer; transition: background .2s; }
+.account.pickable:hover { background: rgba(255, 255, 255, .09); }
+.account-avatar { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; flex-shrink: 0; background: rgba(255, 255, 255, .06); }
+.account-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.account-info strong, .account-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account .badge { padding: 2px 9px; font-size: 11px; white-space: nowrap; }
+.account .warn-badge { color: var(--gold); border-color: rgba(251, 191, 36, .45); }
+.account-actions { display: flex; gap: 6px; }
+.account-actions .btn-small { margin: 0; }
+.login-accounts { margin-bottom: 10px; }
+.login-accounts .account-list { margin-bottom: 0; max-height: 170px; overflow-y: auto; }
+#btn-login-cancel { margin-top: 6px; }

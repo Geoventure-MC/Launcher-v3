@@ -39,6 +39,9 @@ pub enum LauncherError {
     #[error("Erreur de sérialisation JSON : {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("{0}")]
+    Account(String),
+
     #[error("Erreur interne : {0}")]
     Internal(String),
 }
@@ -62,6 +65,7 @@ impl LauncherError {
             Self::InvalidLaunchConfig(_) => "INVALID_LAUNCH_CONFIG",
             Self::Io(_) => "IO_ERROR",
             Self::Json(_) => "JSON_ERROR",
+            Self::Account(_) => "ACCOUNT_ERROR",
             Self::Internal(_) => "INTERNAL_ERROR",
         }
     }

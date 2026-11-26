@@ -42,7 +42,7 @@
   const saveStats = () => store.set('nexus_rust_stats', stats);
 
   const state = {
-    config: null, offline: false, account: null, system: null, plans: {},
+    config: null, offline: false, account: null, accounts: { accounts: [], active: null }, addingAccount: false, loginSite: null, system: null, plans: {},
     launching: false, gameRunning: false, gameStartedAt: null,
     servers: DEFAULT_SERVERS.slice(), statuses: [], achievements: [], news: [], heroIndex: 0, page: 'home',
   };
@@ -339,7 +339,7 @@
       if (res.offline) setBadge('Hors ligne · dernière config connue', 'warn');
       else if (res.config.maintenance) setBadge('Maintenance', 'warn');
       else setBadge('Panel en ligne', 'ok');
-      $('login-site').textContent = (siteUrl().replace(/^https?:\/\//, '').replace(/\/$/, ''));
+      updateLoginSite();
     } catch (err) {
       state.config = null;
       setBadge('Panel injoignable', 'err');
@@ -398,6 +398,7 @@
     $('btn-join').classList.toggle('btn-danger', state.gameRunning);
     $('btn-kill').classList.toggle('hidden', !state.gameRunning);
     $('play-block-reason').textContent = reason;
+    document.querySelectorAll('.account-lock, #btn-add-account').forEach((b) => { b.disabled = busy; });
   }
 
   // ===========================================================================
@@ -627,7 +628,9 @@
 
   function renderAccount(account) {
     state.account = account;
-    $('login-screen').classList.toggle('hidden', !!account);
+    if (!account) state.addingAccount = false;
+    $('login-screen').classList.toggle('hidden', !!account && !state.addingAccount);
+    $('btn-login-cancel').classList.toggle('hidden', !account);
     if (account) {
       const avatar = safeHttps(account.skin_url) || 'assets/img/icon.png';
       $('az-avatar').src = avatar;
@@ -664,7 +667,7 @@
     btn.textContent = 'Connexion…';
     try {
       const res = await invoke('azuriom_login', {
-        siteUrl: siteUrl(), email: $('az-email').value.trim(), password: $('az-password').value, code2fa: $('az-2fa').value.trim() || null,
+        siteUrl: state.loginSite || siteUrl(), email: $('az-email').value.trim(), password: $('az-password').value, code2fa: $('az-2fa').value.trim() || null,
       });
       if (res.outcome === 'requires2fa') {
         $('az-2fa-wrap').classList.remove('hidden');
@@ -673,6 +676,10 @@
       } else if (res.outcome === 'authenticated') {
         $('az-password').value = '';
         $('az-2fa').value = '';
+        $('az-2fa-wrap').classList.add('hidden');
+        state.addingAccount = false;
+        state.loginSite = null;
+        await refreshAccounts();
         renderAccount(res.account);
         toast(`Bienvenue, ${res.account.username} !`);
         loadConfig();
@@ -691,12 +698,116 @@
   function shakeLogin() { const c = $('az-login-form'); c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake'); }
   $('link-register').addEventListener('click', () => openUrl(`${siteUrl()}user/register`));
   $('link-forgot').addEventListener('click', () => openUrl(`${siteUrl()}user/password/reset`));
+  // Déconnecte le compte ACTIF seulement. Les autres restent : aucun n'est activé d'office,
+  // l'écran de connexion propose la liste.
   $('btn-logout').addEventListener('click', async () => {
     if (state.launching || state.gameRunning) return toast('Fermez d’abord le jeu.');
-    await invoke('azuriom_logout').catch(() => {});
+    try {
+      applyAccountList(await invoke('azuriom_logout'));
+    } catch (err) { return toast(errMsg(err)); }
     renderAccount(null);
     showPage('home');
   });
+
+  // ---- Plusieurs comptes -------------------------------------------------------------------
+  const MAX_ACCOUNTS = 10; // même plafond que le backend (accounts.rs)
+  const siteHost = (u) => String(u || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  function updateLoginSite() { $('login-site').textContent = siteHost(state.loginSite || siteUrl()); }
+
+  function applyAccountList(list) {
+    state.accounts = list && Array.isArray(list.accounts) ? list : { accounts: [], active: null };
+    renderAccountList();
+    renderLoginAccounts();
+    $('btn-add-account').title = state.accounts.accounts.length >= MAX_ACCOUNTS ? `Limite de ${MAX_ACCOUNTS} comptes atteinte : retirez-en un avant d’en ajouter.` : '';
+  }
+  async function refreshAccounts() { applyAccountList(await invoke('azuriom_list_accounts').catch(() => null)); }
+
+  function accountRow(acc, manage) {
+    const several = new Set(state.accounts.accounts.map((a) => siteHost(a.site_url))).size > 1;
+    const img = el('img', { class: 'account-avatar', alt: '', src: safeHttps(acc.skin_url) || 'assets/img/icon.png' });
+    img.onerror = () => { img.src = 'assets/img/icon.png'; };
+    const info = el('div', { class: 'account-info' }, [el('strong', { text: acc.username }), several ? el('span', { class: 'muted small', text: siteHost(acc.site_url) }) : null]);
+    const badges = [acc.active ? el('span', { class: 'badge', text: 'Actif' }) : null, acc.needs_login ? el('span', { class: 'badge warn-badge', text: 'Reconnexion requise' }) : null];
+    const row = el('li', { class: `account${acc.active ? ' active' : ''}${acc.needs_login ? ' stale' : ''}` }, [img, info, ...badges]);
+    if (manage) {
+      const actions = el('div', { class: 'account-actions' });
+      if (!acc.active) actions.append(el('button', { class: 'btn btn-small account-lock', text: acc.needs_login ? 'Se reconnecter' : 'Utiliser', onclick: () => useAccount(acc.key) }));
+      const rm = confirmButton('Retirer', () => removeAccount(acc.key));
+      if (acc.active) rm.classList.add('account-lock');
+      actions.append(rm);
+      row.append(actions);
+    } else {
+      row.classList.add('pickable');
+      row.tabIndex = 0;
+      row.addEventListener('click', () => useAccount(acc.key));
+      row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); useAccount(acc.key); } });
+    }
+    return row;
+  }
+  function renderAccountList() {
+    $('account-list').replaceChildren(...state.accounts.accounts.map((a) => accountRow(a, true)));
+    updatePlayButton();
+  }
+  function renderLoginAccounts() {
+    const list = state.accounts.accounts;
+    $('login-accounts').classList.toggle('hidden', list.length === 0);
+    $('login-account-list').replaceChildren(...list.map((a) => accountRow(a, false)));
+  }
+
+  // Ouvre l'écran de connexion (compte à ajouter, ou à reconnecter si `acc` est donné).
+  function showLogin(acc) {
+    state.addingAccount = true;
+    state.loginSite = acc ? acc.site_url : null;
+    $('az-email').value = acc ? acc.username : '';
+    $('az-password').value = '';
+    $('az-2fa').value = '';
+    $('az-2fa-wrap').classList.add('hidden');
+    renderAccount(state.account);
+    $('az-status').textContent = acc ? `Reconnexion requise pour ${acc.username} : entrez son mot de passe.` : '';
+    updateLoginSite();
+    setTimeout(() => $(acc ? 'az-password' : 'az-email').focus(), 80);
+  }
+  $('btn-add-account').addEventListener('click', () => {
+    if (state.launching || state.gameRunning) return toast('Fermez d’abord le jeu avant de changer de compte.');
+    showLogin(null);
+  });
+  $('btn-login-cancel').addEventListener('click', () => {
+    state.addingAccount = false;
+    state.loginSite = null;
+    updateLoginSite();
+    renderAccount(state.account);
+  });
+
+  async function useAccount(key) {
+    if (state.launching || state.gameRunning) return toast('Fermez d’abord le jeu avant de changer de compte.');
+    const acc = state.accounts.accounts.find((a) => a.key === key);
+    if (!acc) return;
+    if (acc.active && state.account) { state.addingAccount = false; return renderAccount(state.account); }
+    if (acc.needs_login) return showLogin(acc);
+    try {
+      const res = await invoke('azuriom_switch_account', { key });
+      applyAccountList(res.accounts);
+      if (res.reconnect_required) {
+        const stale = res.accounts.accounts.find((a) => a.key === key);
+        toast('Session expirée : reconnexion requise pour ce compte.');
+        // Le compte actif (s'il y en a un) ne change pas.
+        return showLogin(stale || acc);
+      }
+      state.addingAccount = false;
+      state.loginSite = null;
+      renderAccount(res.account);
+      toast(`Compte actif : ${res.account.username}`);
+      loadConfig();
+    } catch (err) { toast(errMsg(err)); }
+  }
+
+  async function removeAccount(key) {
+    try {
+      const wasActive = state.accounts.active === key;
+      applyAccountList(await invoke('azuriom_remove_account', { key }));
+      if (wasActive) { renderAccount(null); showPage('home'); }
+    } catch (err) { toast(errMsg(err)); }
+  }
 
   // ===========================================================================
   // Lancement
@@ -1657,6 +1768,7 @@
     await loadConfig();
     $('preload-text').textContent = 'Vérification de la session…';
     const restored = await invoke('azuriom_restore_session', { fallbackSiteUrl: siteUrl() }).catch(() => null);
+    await refreshAccounts();
     renderAccount(restored && restored.account ? restored.account : null);
     await loadSystem();
     $('preload').classList.add('done');

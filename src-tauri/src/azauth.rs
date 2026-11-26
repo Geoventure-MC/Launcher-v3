@@ -69,6 +69,7 @@ struct RawAzAuthPayload {
     role: Option<AzRole>,
 }
 
+/// Ancien fichier de session (un seul compte) : lu une fois pour la migration vers `accounts.json`.
 pub fn account_session_path(storage_dir: &Path) -> PathBuf {
     storage_dir.join("azuriom_session.json")
 }
@@ -77,58 +78,6 @@ pub fn account_session_path(storage_dir: &Path) -> PathBuf {
 pub fn build_skin_url(base_url: &Url, username: &str) -> String {
     let encoded: String = url::form_urlencoded::byte_serialize(username.as_bytes()).collect();
     format!("{base_url}api/skin-api/avatars/face/{encoded}")
-}
-
-/// Persiste la session Azuriom dans le répertoire privé du launcher. Le jeton part dans le
-/// coffre-fort du système quand il y en a un ; le fichier n'en garde alors qu'une place vide.
-pub async fn save_account_session(storage_dir: &Path, account: &AzAccount) -> LauncherResult<()> {
-    tokio::fs::create_dir_all(storage_dir).await?;
-    let path = account_session_path(storage_dir);
-    let mut on_disk = account.clone();
-    if crate::secure::store_token(&account.access_token) {
-        on_disk.access_token = String::new();
-    }
-    let data = serde_json::to_vec_pretty(&on_disk)?;
-    tokio::fs::write(&path, data).await?;
-    crate::secure::restrict_permissions(&path);
-    Ok(())
-}
-
-pub async fn load_account_session(storage_dir: &Path) -> LauncherResult<Option<AzAccount>> {
-    let path = account_session_path(storage_dir);
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
-            let mut acc: AzAccount = serde_json::from_slice(&bytes)?;
-            if acc.access_token.is_empty() {
-                match crate::secure::load_token() {
-                    Some(t) => acc.access_token = t,
-                    // Coffre-fort vidé ou inaccessible : la session n'est plus utilisable.
-                    None => return Ok(None),
-                }
-            } else if crate::secure::store_token(&acc.access_token) {
-                // Ancienne session en clair : on la déplace dans le coffre-fort.
-                let mut on_disk = acc.clone();
-                on_disk.access_token = String::new();
-                if let Ok(data) = serde_json::to_vec_pretty(&on_disk) {
-                    let _ = tokio::fs::write(&path, data).await;
-                }
-            }
-            crate::secure::restrict_permissions(&path);
-            Ok(Some(acc))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
-    }
-}
-
-pub async fn clear_account_session(storage_dir: &Path) -> LauncherResult<()> {
-    crate::secure::delete_token();
-    let path = account_session_path(storage_dir);
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
 }
 
 /// Client natif pour l'API d'authentification Azuriom (`/api/auth/*`).
@@ -300,7 +249,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[tokio::test]
-    async fn azauth_handles_2fa_success_and_session_persistence() {
+    async fn azauth_handles_2fa_and_success() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -350,41 +299,13 @@ mod tests {
             .unwrap();
         server.await.unwrap();
 
-        let tmp = tempfile::tempdir().unwrap();
         match step2 {
             AzAuthResponse::Authenticated { account } => {
                 assert_eq!(account.username, "GeoventurePlayer");
                 assert_eq!(account.role.as_ref().unwrap().name, "Admin");
                 assert!(account.skin_url.as_deref().unwrap().contains("GeoventurePlayer"));
-
-                save_account_session(tmp.path(), &account).await.unwrap();
-                let loaded = load_account_session(tmp.path()).await.unwrap().unwrap();
-                assert_eq!(loaded.username, "GeoventurePlayer");
-
-                clear_account_session(tmp.path()).await.unwrap();
-                assert!(load_account_session(tmp.path()).await.unwrap().is_none());
             }
             other => panic!("Attendu Authenticated, reçu {other:?}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod migration_tests {
-    use super::*;
-
-    /// Session écrite par la dernière version de l'ancien launcher (windows/rustSwitch.js).
-    #[tokio::test]
-    async fn reads_session_written_by_old_launcher() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            account_session_path(tmp.path()),
-            r##"{"id":0,"username":"Bob","uuid":"u","access_token":"t","email_verified":true,"money":5,"banned":false,"role":{"name":"VIP","color":"#fff","is_admin":false},"site_url":"https://geoventure.fr/","skin_url":null}"##,
-        )
-        .unwrap();
-        let acc = load_account_session(tmp.path()).await.unwrap().unwrap();
-        assert_eq!(acc.username, "Bob");
-        assert_eq!(acc.access_token, "t");
-        assert_eq!(acc.role.unwrap().name, "VIP");
     }
 }

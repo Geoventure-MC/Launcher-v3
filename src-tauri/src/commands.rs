@@ -1,7 +1,5 @@
-use crate::azauth::{
-    clear_account_session, load_account_session, save_account_session, AzAccount, AzAuthClient,
-    AzAuthResponse,
-};
+use crate::accounts::{AccountList, AccountStore};
+use crate::azauth::{AzAccount, AzAuthClient, AzAuthResponse};
 use crate::config::{ConfigFetchResult, HttpTimeouts, PanelClient};
 use crate::downloader::{
     diff_verify_manifest, sync_modpack_parallel, DiffScanReport, ManifestEntry, SyncReport,
@@ -161,6 +159,64 @@ pub async fn fetch_panel_config(
     Ok(res)
 }
 
+/// Résultat d'un changement de compte (`azuriom_switch_account`).
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSwitch {
+    /// Compte devenu actif (avec son jeton, comme `azuriom_restore_session`). `None` si le site
+    /// refuse la session.
+    pub account: Option<AzAccount>,
+    pub verified_online: bool,
+    /// Le site a refusé la session : le compte est marqué, il faut retaper le mot de passe.
+    pub reconnect_required: bool,
+    pub accounts: AccountList,
+}
+
+/// Pas de changement de compte pendant la préparation ou la partie : le jeu garde son pseudo.
+fn ensure_not_playing(state: &AppState) -> LauncherResult<()> {
+    if state.launching.load(Ordering::SeqCst) || state.game_running.load(Ordering::SeqCst) {
+        return Err(LauncherError::Account(
+            "Fermez d’abord le jeu avant de changer de compte.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Compte actif avec son jeton (journaux, diagnostic).
+fn active_account(state: &AppState) -> Option<AzAccount> {
+    AccountStore::system(&state.session_dir).active().ok().flatten()
+}
+
+/// Jetons (et uuid) de tous les comptes gardés : à masquer dans les journaux et diagnostics.
+fn account_secrets(state: &AppState, with_uuid: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for acc in AccountStore::system(&state.session_dir).all().unwrap_or_default() {
+        out.push(acc.access_token);
+        if with_uuid {
+            out.push(acc.uuid);
+        }
+    }
+    out
+}
+
+enum Verification {
+    Fresh(AzAccount),
+    /// 401, 403 ou 422 : le site ne reconnaît plus ce jeton.
+    Refused,
+    /// Site injoignable (ou adresse inutilisable) : on garde la session locale.
+    Unreachable,
+}
+
+async fn verify_saved(site: &str, token: &str) -> Verification {
+    let Ok(client) = AzAuthClient::new(site, HttpTimeouts::default()) else {
+        return Verification::Unreachable;
+    };
+    match client.verify(token).await {
+        Ok(fresh) => Verification::Fresh(fresh),
+        Err(LauncherError::HttpStatus { status: 401 | 403 | 422, .. }) => Verification::Refused,
+        Err(_) => Verification::Unreachable,
+    }
+}
+
 #[tauri::command]
 pub async fn azuriom_login(
     app: AppHandle,
@@ -170,38 +226,58 @@ pub async fn azuriom_login(
     password: String,
     code_2fa: Option<String>,
 ) -> LauncherResult<AzAuthResponse> {
+    // Le compte connecté devient le compte actif : pas pendant une partie.
+    if AccountStore::system(&state.session_dir).active_key().ok().flatten().is_some() {
+        ensure_not_playing(&state)?;
+    }
     emit_log(&app, &state.logs, LogLevel::Info, "azauth", "Connexion Azuriom en cours…");
     let client = AzAuthClient::new(&site_url, HttpTimeouts::default())?;
     let res = client
         .authenticate(&email, &password, code_2fa.as_deref())
         .await?;
-    match &res {
+    match res {
         AzAuthResponse::Authenticated { account } => {
-            let _ = save_account_session(&state.session_dir, account).await;
+            match AccountStore::system(&state.session_dir).upsert(&account, true) {
+                Ok(_) => emit_log(
+                    &app,
+                    &state.logs,
+                    LogLevel::Info,
+                    "azauth",
+                    format!("Connecté en tant que {} (session sauvegardée).", account.username),
+                ),
+                Err(LauncherError::Account(message)) => {
+                    // Plafond de comptes atteint : rien n'est enregistré.
+                    emit_log(&app, &state.logs, LogLevel::Warn, "azauth", message.clone());
+                    return Ok(AzAuthResponse::Rejected {
+                        reason: "accounts_limit".into(),
+                        message,
+                    });
+                }
+                Err(e) => emit_log(
+                    &app,
+                    &state.logs,
+                    LogLevel::Warn,
+                    "azauth",
+                    format!("Connecté en tant que {}, mais session non sauvegardée : {e}", account.username),
+                ),
+            }
+            Ok(AzAuthResponse::Authenticated { account })
+        }
+        AzAuthResponse::Requires2fa => {
+            emit_log(&app, &state.logs, LogLevel::Info, "azauth", "Code 2FA Azuriom requis.");
+            Ok(AzAuthResponse::Requires2fa)
+        }
+        AzAuthResponse::Rejected { reason, message } => {
             emit_log(
                 &app,
                 &state.logs,
-                LogLevel::Info,
+                LogLevel::Warn,
                 "azauth",
-                format!("Connecté en tant que {} (session sauvegardée).", account.username),
+                format!("Connexion Azuriom refusée ({reason})."),
             );
+            Ok(AzAuthResponse::Rejected { reason, message })
         }
-        AzAuthResponse::Requires2fa => emit_log(
-            &app,
-            &state.logs,
-            LogLevel::Info,
-            "azauth",
-            "Code 2FA Azuriom requis.",
-        ),
-        AzAuthResponse::Rejected { reason, .. } => emit_log(
-            &app,
-            &state.logs,
-            LogLevel::Warn,
-            "azauth",
-            format!("Connexion Azuriom refusée ({reason})."),
-        ),
     }
-    Ok(res)
 }
 
 #[tauri::command]
@@ -210,11 +286,18 @@ pub async fn azuriom_restore_session(
     state: State<'_, AppState>,
     fallback_site_url: Option<String>,
 ) -> LauncherResult<RestoredSession> {
-    let Some(saved) = load_account_session(&state.session_dir).await? else {
-        return Ok(RestoredSession {
-            account: None,
-            verified_online: false,
-        });
+    let store = AccountStore::system(&state.session_dir);
+    let none = RestoredSession {
+        account: None,
+        verified_online: false,
+    };
+    let Some(key) = store.active_key()? else {
+        return Ok(none);
+    };
+    let Some(saved) = store.get(&key)? else {
+        // Jeton disparu du coffre-fort : la session n'est plus utilisable.
+        store.mark_needs_login(&key)?;
+        return Ok(none);
     };
 
     let site = if !saved.site_url.is_empty() {
@@ -223,64 +306,146 @@ pub async fn azuriom_restore_session(
         fallback_site_url.unwrap_or_else(|| "https://geoventure.fr/".to_string())
     };
 
-    if let Ok(client) = AzAuthClient::new(&site, HttpTimeouts::default()) {
-        match client.verify(&saved.access_token).await {
-            Ok(fresh) => {
-                let _ = save_account_session(&state.session_dir, &fresh).await;
-                emit_log(
-                    &app,
-                    &state.logs,
-                    LogLevel::Info,
-                    "azauth",
-                    format!("Session Azuriom vérifiée pour {}.", fresh.username),
-                );
-                return Ok(RestoredSession {
-                    account: Some(fresh),
-                    verified_online: true,
-                });
-            }
-            Err(crate::error::LauncherError::HttpStatus { status: 401 | 403 | 422, .. }) => {
-                let _ = clear_account_session(&state.session_dir).await;
-                emit_log(
-                    &app,
-                    &state.logs,
-                    LogLevel::Warn,
-                    "azauth",
-                    "Session Azuriom expirée : reconnexion requise.",
-                );
-                return Ok(RestoredSession {
-                    account: None,
-                    verified_online: false,
-                });
-            }
-            Err(_) => {
-                emit_log(
-                    &app,
-                    &state.logs,
-                    LogLevel::Warn,
-                    "azauth",
-                    format!("Site Azuriom injoignable : session locale conservée ({}).", saved.username),
-                );
-            }
+    match verify_saved(&site, &saved.access_token).await {
+        Verification::Fresh(fresh) => {
+            let _ = store.refresh(&key, &fresh);
+            emit_log(
+                &app,
+                &state.logs,
+                LogLevel::Info,
+                "azauth",
+                format!("Session Azuriom vérifiée pour {}.", fresh.username),
+            );
+            Ok(RestoredSession {
+                account: Some(fresh),
+                verified_online: true,
+            })
+        }
+        Verification::Refused => {
+            // Le compte reste dans la liste, marqué « reconnexion requise ».
+            store.mark_needs_login(&key)?;
+            emit_log(
+                &app,
+                &state.logs,
+                LogLevel::Warn,
+                "azauth",
+                "Session Azuriom expirée : reconnexion requise.",
+            );
+            Ok(none)
+        }
+        Verification::Unreachable => {
+            emit_log(
+                &app,
+                &state.logs,
+                LogLevel::Warn,
+                "azauth",
+                format!("Site Azuriom injoignable : session locale conservée ({}).", saved.username),
+            );
+            Ok(RestoredSession {
+                account: Some(saved),
+                verified_online: false,
+            })
         }
     }
+}
 
-    Ok(RestoredSession {
-        account: Some(saved),
-        verified_online: false,
+/// Comptes gardés dans le launcher (sans jeton) et compte actif.
+#[tauri::command]
+pub async fn azuriom_list_accounts(state: State<'_, AppState>) -> LauncherResult<AccountList> {
+    AccountStore::system(&state.session_dir).list()
+}
+
+/// Passe à un autre compte gardé, sans mot de passe. Même vérification en ligne que la
+/// restauration : session refusée = compte marqué « reconnexion requise » (jamais supprimé en
+/// silence), site injoignable = on bascule quand même sur la session locale.
+#[tauri::command]
+pub async fn azuriom_switch_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> LauncherResult<AccountSwitch> {
+    ensure_not_playing(&state)?;
+    let store = AccountStore::system(&state.session_dir);
+    let reconnect = |store: &AccountStore| -> LauncherResult<AccountSwitch> {
+        Ok(AccountSwitch {
+            account: None,
+            verified_online: false,
+            reconnect_required: true,
+            accounts: store.list()?,
+        })
+    };
+    let Some(saved) = store.get(&key)? else {
+        store.mark_needs_login(&key)?;
+        return reconnect(&store);
+    };
+    let (account, verified_online) = match verify_saved(&saved.site_url, &saved.access_token).await {
+        Verification::Fresh(fresh) => {
+            let new_key = store.refresh(&key, &fresh)?;
+            store.set_active(&new_key)?;
+            (fresh, true)
+        }
+        Verification::Refused => {
+            store.mark_needs_login(&key)?;
+            emit_log(
+                &app,
+                &state.logs,
+                LogLevel::Warn,
+                "azauth",
+                format!("Session Azuriom expirée pour {} : reconnexion requise.", saved.username),
+            );
+            return reconnect(&store);
+        }
+        Verification::Unreachable => {
+            store.set_active(&key)?;
+            emit_log(
+                &app,
+                &state.logs,
+                LogLevel::Warn,
+                "azauth",
+                format!("Site Azuriom injoignable : session locale conservée ({}).", saved.username),
+            );
+            (saved, false)
+        }
+    };
+    emit_log(&app, &state.logs, LogLevel::Info, "azauth", format!("Compte actif : {}.", account.username));
+    Ok(AccountSwitch {
+        account: Some(account),
+        verified_online,
+        reconnect_required: false,
+        accounts: store.list()?,
     })
 }
 
+/// Retire un compte : jeton effacé du coffre-fort, déconnexion côté site au mieux. Si c'est le
+/// compte actif, aucun autre n'est activé : changer d'identité sans le dire serait trompeur
+/// (l'interface propose la liste).
 #[tauri::command]
-pub async fn azuriom_logout(app: AppHandle, state: State<'_, AppState>) -> LauncherResult<()> {
-    if let Some(saved) = load_account_session(&state.session_dir).await? {
-        if let Ok(client) = AzAuthClient::new(&saved.site_url, HttpTimeouts::default()) {
-            let _ = client.logout(&saved.access_token).await;
-        }
+pub async fn azuriom_remove_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> LauncherResult<AccountList> {
+    let store = AccountStore::system(&state.session_dir);
+    if store.active_key()?.as_deref() == Some(key.as_str()) {
+        ensure_not_playing(&state)?;
     }
-    clear_account_session(&state.session_dir).await?;
-    emit_log(&app, &state.logs, LogLevel::Info, "azauth", "Déconnexion Azuriom effectuée.");
-    Ok(())
+    if let Some(removed) = store.remove(&key)? {
+        if let Ok(client) = AzAuthClient::new(&removed.site_url, HttpTimeouts::default()) {
+            let _ = client.logout(&removed.access_token).await;
+        }
+        emit_log(&app, &state.logs, LogLevel::Info, "azauth", format!("Compte {} retiré.", removed.username));
+    }
+    store.list()
+}
+
+/// Déconnecte le compte ACTIF seulement (il est retiré de la liste, les autres restent).
+#[tauri::command]
+pub async fn azuriom_logout(app: AppHandle, state: State<'_, AppState>) -> LauncherResult<AccountList> {
+    let store = AccountStore::system(&state.session_dir);
+    match store.active_key()? {
+        Some(key) => azuriom_remove_account(app, state, key).await,
+        None => store.list(),
+    }
 }
 
 #[tauri::command]
@@ -530,9 +695,7 @@ pub async fn read_game_log(
     };
     let text = tail_file(&path, 1500).unwrap_or_default();
     let mut secrets = Vec::new();
-    if let Ok(Some(acc)) = load_account_session(&state.session_dir).await {
-        secrets.push(acc.access_token);
-    }
+    secrets.extend(account_secrets(&state, false));
     let homes: Vec<String> = directories::BaseDirs::new()
         .map(|b| vec![b.home_dir().to_string_lossy().to_string()])
         .unwrap_or_default();
@@ -1366,7 +1529,7 @@ pub async fn collect_diagnostic(app: AppHandle, state: State<'_, AppState>, req:
     let _ = writeln!(r, "=== Diagnostic Geoventure Launcher (Rust) ===");
     let _ = writeln!(r, "Date : {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z"));
     let _ = writeln!(r, "Launcher : {}", app.package_info().version);
-    if let Ok(Some(acc)) = load_account_session(&state.session_dir).await {
+    if let Some(acc) = active_account(&state) {
         let _ = writeln!(r, "Joueur : {}", acc.username);
     }
     let _ = writeln!(r, "Système : {}", sys.os);
@@ -1436,10 +1599,7 @@ pub async fn collect_diagnostic(app: AppHandle, state: State<'_, AppState>, req:
     }
 
     let mut secrets = Vec::new();
-    if let Ok(Some(acc)) = load_account_session(&state.session_dir).await {
-        secrets.push(acc.access_token);
-        secrets.push(acc.uuid);
-    }
+    secrets.extend(account_secrets(&state, true));
     let mut homes = Vec::new();
     if let Some(b) = directories::BaseDirs::new() {
         homes.push(b.home_dir().to_string_lossy().to_string());

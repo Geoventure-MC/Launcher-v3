@@ -36,6 +36,10 @@
       <img class="login-logo" src="assets/img/icon.png" alt="" />
       <h1>Bienvenue sur <span class="accent">Geoventure</span></h1>
       <p class="muted">Connectez-vous avec votre compte du site <strong id="login-site">geoventure.fr</strong>.</p>
+      <div id="login-accounts" class="login-accounts hidden">
+        <p class="muted small">Comptes enregistrés</p>
+        <ul id="login-account-list" class="account-list"></ul>
+      </div>
       <label class="field">
         <span>E-mail ou pseudo</span>
         <input id="az-email" type="text" autocomplete="username" required />
@@ -49,6 +53,7 @@
         <input id="az-2fa" type="text" inputmode="numeric" maxlength="10" autocomplete="one-time-code" />
       </label>
       <button type="submit" id="btn-login" class="btn btn-primary btn-block">Se connecter</button>
+      <button type="button" id="btn-login-cancel" class="btn btn-block hidden">Annuler</button>
       <p id="az-status" class="form-status" role="status"></p>
       <div class="login-links">
         <button type="button" class="link" id="link-register">Créer un compte</button>
@@ -394,7 +399,11 @@
           </div>
           <div class="card">
             <h3 class="card-title">Compte</h3>
-            <button class="btn btn-danger" id="btn-logout">Se déconnecter</button>
+            <ul id="account-list" class="account-list"></ul>
+            <div class="actions">
+              <button class="btn" id="btn-add-account">＋ Ajouter un compte</button>
+              <button class="btn btn-danger" id="btn-logout" title="Déconnecte le compte actif ; les autres comptes restent enregistrés">Se déconnecter</button>
+            </div>
           </div>
         </div>
       </section>

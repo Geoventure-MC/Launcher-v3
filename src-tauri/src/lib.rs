@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod azauth;
 pub mod commands;
 pub mod config;
@@ -125,6 +126,9 @@ pub fn run() {
             commands::azuriom_login,
             commands::azuriom_restore_session,
             commands::azuriom_logout,
+            commands::azuriom_list_accounts,
+            commands::azuriom_switch_account,
+            commands::azuriom_remove_account,
             commands::azuriom_verify_session,
             commands::fetch_modpack_manifest,
             commands::verify_modpack_files,

@@ -28,7 +28,8 @@ Après une modification de `frontend/`, toucher `src-tauri/src/lib.rs` avant `ca
 
 `src-tauri/src/` : `commands.rs` (commandes appelées par l'interface), `install.rs` (Minecraft, Java, Forge),
 `downloader.rs` (modpack), `config.rs` (panel), `azauth.rs` (connexion Azuriom), `crash.rs` (analyse des plantages),
-`media.rs` (mods communauté, captures, packs), `discord.rs`, `tray.rs`, `secure.rs` (coffre-fort du système).
+`media.rs` (mods communauté, captures, packs), `discord.rs`, `tray.rs`, `secure.rs` (coffre-fort du système),
+`accounts.rs` (plusieurs comptes du site : `accounts.json` sans jeton, un jeton par compte dans le coffre-fort, migration de l'ancien `azuriom_session.json`).
 `frontend/` : `index.html`, `app.js`, `styles.css`, `i18n.js` (anglais). `tests/ui/` : tests de l'interface.
 
 ## Contrat avec le panel : à ne pas casser
