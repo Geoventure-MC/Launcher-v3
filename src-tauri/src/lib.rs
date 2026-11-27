@@ -9,6 +9,7 @@ pub mod forge;
 pub mod install;
 pub mod java;
 pub mod launch;
+pub mod legacy;
 pub mod logs;
 pub mod secure;
 pub mod crash;
@@ -92,6 +93,15 @@ pub fn run() {
 
     let start_minimized = std::env::args().any(|a| a == tray::MINIMIZED_ARG);
     tauri::Builder::default()
+        // Un seul launcher à la fois : un second lancement ne fait que remettre la fenêtre existante devant.
+        // Doit rester le premier plugin enregistré.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -99,6 +109,8 @@ pub fn run() {
             Some(vec![tray::MINIMIZED_ARG]),
         ))
         .setup(move |app| {
+            // Raccourcis de l'ancienne installation « Geoventure Launcher » : sinon mise à jour en boucle.
+            legacy::redirect_legacy_shortcuts();
             if let Err(e) = tray::setup(app.handle()) {
                 eprintln!("Icône de notification indisponible : {e}");
             }
