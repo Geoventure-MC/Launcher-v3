@@ -286,8 +286,10 @@ pub fn build_forge_1_20_1_args(cfg: &ForgeLaunchConfig) -> LauncherResult<Vec<St
         "-Djava.library.path={}",
         cfg.natives_dir.to_string_lossy()
     ));
-    args.push("-Dminecraft.launcher.brand=GeoventureRust".to_string());
+    args.push("-Dminecraft.launcher.brand=NexusLauncher".to_string());
     args.push("-Dminecraft.launcher.version=2.0".to_string());
+    // Désactive la fenêtre rouge précoce de Forge (Mod Gather / Loading mods) pour afficher directement GeoLoadingOverlay.
+    args.push("-Dfml.earlyprogresswindow=false".to_string());
 
     // Options module-path requises par Forge 1.20.1 / Java 17
     args.push("--add-exports=java.base/sun.security.util=ALL-UNNAMED".to_string());
@@ -448,6 +450,36 @@ where
     Ok(pid)
 }
 
+/// Force `earlyWindowControl = false` dans `config/fml.toml` pour empêcher Forge 1.20.1
+/// d'afficher l'écran rouge Mojang/Forge avant le chargement personnalisé GeoVenture.
+pub fn disable_forge_early_window(game_dir: &Path) {
+    let config_dir = game_dir.join("config");
+    let _ = std::fs::create_dir_all(&config_dir);
+    let fml_path = config_dir.join("fml.toml");
+    let updated = match std::fs::read_to_string(&fml_path) {
+        Ok(content) => {
+            if content.contains("earlyWindowControl") {
+                content
+                    .lines()
+                    .map(|line| {
+                        if line.trim_start().starts_with("earlyWindowControl") {
+                            "earlyWindowControl = false"
+                        } else {
+                            line
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n"
+            } else {
+                format!("{}\nearlyWindowControl = false\n", content.trim_end())
+            }
+        }
+        Err(_) => "# Configuré par Nexus Launcher\nearlyWindowControl = false\n".to_string(),
+    };
+    let _ = std::fs::write(&fml_path, updated);
+}
+
 /// Démarre le processus Minecraft Forge et diffuse stdout/stderr dans `LogStore` et le callback temps réel.
 pub async fn spawn_forge_process<F>(
     cfg: &ForgeLaunchConfig,
@@ -457,6 +489,7 @@ pub async fn spawn_forge_process<F>(
 where
     F: Fn(LogEntry) + Send + Sync + 'static,
 {
+    disable_forge_early_window(&cfg.game_dir);
     let args = build_forge_1_20_1_args(cfg)?;
     let mut cmd = Command::new(&cfg.java_bin);
     cmd.args(&args)

@@ -52,7 +52,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &play, &sep, &quit])?;
     let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("Geoventure Launcher")
+        .tooltip("Nexus Launcher")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {

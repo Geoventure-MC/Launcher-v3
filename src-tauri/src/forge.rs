@@ -318,7 +318,7 @@ pub fn resolve_installed_forge_plan(req: &ForgeResolveRequest) -> LauncherResult
     // chargent et le jeu plante. Même valeur que l'ancien launcher (minecraft-java-core).
     vars.insert("version_name", parent_id.clone());
     vars.insert("natives_directory", natives_dir.to_string_lossy().to_string());
-    vars.insert("launcher_name", "GeoventureRust".to_string());
+    vars.insert("launcher_name", "NexusLauncher".to_string());
     vars.insert("launcher_version", "2.0".to_string());
     vars.insert("classpath", classpath_str.clone());
     vars.insert("auth_player_name", req.username.clone());

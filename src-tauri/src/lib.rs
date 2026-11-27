@@ -177,5 +177,5 @@ pub fn run() {
             commands::desktop_notify,
         ])
         .run(tauri::generate_context!())
-        .expect("Erreur lors du démarrage de Geoventure Launcher");
+        .expect("Erreur lors du démarrage de Nexus Launcher");
 }
