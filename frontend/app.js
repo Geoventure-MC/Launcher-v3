@@ -13,9 +13,9 @@
 
   // Serveurs connus (comme le launcher Electron), complétés par le panel.
   const DEFAULT_SERVERS = [
-    { id: 'geoventure', name: 'Geoventure', description: 'Aventure & Exploration', theme_color: '#4ade80', is_default: true },
-    { id: 'elandor', name: 'Elandor', description: 'RPG & Fantaisie', theme_color: '#a78bfa' },
-    { id: 'pokeland', name: 'Pokeland', description: 'Pokémon & Combat', theme_color: '#fb923c' },
+    { id: 'geoventure', name: 'Geoventure', description: 'Aventure & Géopolitique · Forge 1.20.1', theme_color: '#4ade80', is_default: true },
+    { id: 'elandor', name: 'Elandor Chronicles', description: 'RPG & Fantaisie · Vanilla 26.3', theme_color: '#a78bfa' },
+    { id: 'pokeland', name: 'Pokéland', description: 'Cobblemon 1.8.4 · NeoForge 1.21.1', theme_color: '#fb923c' },
   ];
   const KNOWN_ART = ['geoventure', 'elandor', 'pokeland'];
   const LOCALE = window.I18N && window.I18N.lang === 'en' ? 'en-GB' : 'fr-FR';
